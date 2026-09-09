@@ -213,10 +213,19 @@ void WebsocketClient::DoStop() {
       SPDLOG_INFO("Shutting down TCP socket...");
 
       auto& tcp = boost::beast::get_lowest_layer(ws_);
-      const boost::asio::socket_base::linger linger(true, 0);
-      tcp.socket().set_option(linger);
 
       if (tcp.socket().is_open()) {
+        // Только на живом сокете и только неброшенной перегрузкой: на уже
+        // закрытом set_option кидает Bad file descriptor, а вместе с ним
+        // улетал весь блок - shutdown и close не выполнялись вовсе, и
+        // дескриптор оставался висеть до конца жизни процесса.
+        const boost::asio::socket_base::linger linger(true, 0);
+        tcp.socket().set_option(linger, ec);
+        if (ec) {
+          SPDLOG_DEBUG("TCP linger option not applied: {}", ec.message());
+          ec.clear();
+        }
+
         tcp.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         if (ec && ec != boost::asio::error::not_connected) {
           SPDLOG_WARN("TCP socket shutdown error: {}", ec.message());

@@ -138,6 +138,17 @@ class Socks5Server {
   Socks5Server(const Socks5Server&) = delete;
   Socks5Server& operator=(const Socks5Server&) = delete;
 
+  // Порт открывается отдельно от обслуживания: ZeroBlock ждёт готовности
+  // помощника считаные секунды, а логин-гонка по нескольким десяткам серверов
+  // занимает до минуты. Listen() поднимает слушающий сокет сразу, соединения
+  // копятся в backlog ядра, а Serve() начинает их разбирать, когда туннель
+  // готов и адреса известны.
+  bool Listen();
+  void SetTunnel(const std::string& tun_address_ipv4,
+      const std::string& tun_address_ipv6,
+      const std::string& dns_server_ipv4);
+  bool Serve();
+  // Listen() + Serve() одним вызовом, для случая, когда ждать нечего.
   bool Start();
   void Stop();
   bool IsRunning() const noexcept { return running_.load(); }

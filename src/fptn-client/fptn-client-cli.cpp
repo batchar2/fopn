@@ -18,6 +18,8 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <condition_variable>
 #include <csignal>
 #include <cstdint>
+#include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -33,6 +35,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <argparse/argparse.hpp>
 #include <fmt/format.h>  // NOLINT(build/include_order)
 #include <fmt/ranges.h>  // NOLINT(build/include_order)
+#include <nlohmann/json.hpp>  // NOLINT(build/include_order)
 
 #include "common/logger/logger.h"
 #include "common/network/ip_address.h"
@@ -88,6 +91,78 @@ void RaiseFileDescriptorLimit() {}
 
 // Servers of every token in one pool, each carrying the credentials of the
 // token it came from.
+// Конфиг-файлом кормят то, что не влезает в командную строку: длинные ключи и
+// их массивы. Значения разворачиваются в те же флаги, что и раньше, поэтому
+// разбор, типы и умолчания остаются общими. Флаги, заданные в командной
+// строке, идут после и перекрывают файл.
+std::vector<std::string> ExpandConfigFile(int argc, char* argv[]) {
+  std::vector<std::string> expanded;
+  std::vector<std::string> rest;
+  std::string config_path;
+
+  expanded.emplace_back(argv[0]);
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if ((arg == "-c" || arg == "--config") && i + 1 < argc) {
+      config_path = argv[++i];
+      continue;
+    }
+    rest.push_back(arg);
+  }
+  if (config_path.empty()) {
+    for (auto& arg : rest) {
+      expanded.push_back(std::move(arg));
+    }
+    return expanded;
+  }
+
+  std::ifstream file(config_path);
+  if (!file.is_open()) {
+    throw std::runtime_error("Cannot open config file: " + config_path);
+  }
+  nlohmann::json doc;
+  file >> doc;
+  if (!doc.is_object()) {
+    throw std::runtime_error("Config file must contain a JSON object");
+  }
+
+  const auto to_flag = [](std::string key) {
+    std::replace(key.begin(), key.end(), '_', '-');
+    return "--" + key;
+  };
+  const auto append_value = [&expanded](
+                                const std::string& flag,
+                                const nlohmann::json& value) {
+    expanded.push_back(flag);
+    if (value.is_string()) {
+      expanded.push_back(value.get<std::string>());
+    } else if (value.is_boolean()) {
+      expanded.emplace_back(value.get<bool>() ? "true" : "false");
+    } else {
+      expanded.push_back(value.dump());
+    }
+  };
+
+  for (const auto& [key, value] : doc.items()) {
+    const std::string flag = to_flag(key);
+    if (value.is_array()) {
+      // Массив - это повторяющийся флаг: так задаются несколько токенов.
+      for (const auto& item : value) {
+        append_value(flag, item);
+      }
+    } else if (value.is_null()) {
+      continue;
+    } else {
+      append_value(flag, value);
+    }
+  }
+
+  for (auto& arg : rest) {
+    expanded.push_back(std::move(arg));
+  }
+  return expanded;
+}
+
 std::vector<ServerInfo> CollectServers(const std::vector<std::string>& tokens,
     const std::string& sni,
     fptn::protocol::https::CensorshipStrategy censorship_strategy) {
@@ -202,18 +277,24 @@ std::optional<fptn::utils::speed_estimator::LoginResult> SelectServer(
   return last;
 }
 
-// Three checks over the limit and the process asks to be restarted: procd
-// brings it back and the selection above picks a different server.
+// Три замера подряд за пределом - и сторож просит завершиться. Раньше он слал
+// процессу SIGTERM: в многопоточной программе это грубо, очистка пропускалась,
+// а под ZeroBlock, который запускает помощника сам, уход PID вообще теряет его
+// насовсем. Теперь сторож просто останавливает туннель - главный цикл выходит
+// сам, SOCKS и маршруты убираются штатно, procd поднимает процесс заново.
+// (ZeroBlock --max-ping не передаёт, поэтому там сторож не создаётся вовсе.)
 class LatencyWatchdog final {
  public:
   LatencyWatchdog(ServerInfo server,
       std::string sni,
       fptn::protocol::https::CensorshipStrategy censorship_strategy,
-      int max_ping_ms)
+      int max_ping_ms,
+      std::function<void()> on_over_limit)
       : server_(std::move(server)),
         sni_(std::move(sni)),
         censorship_strategy_(censorship_strategy),
-        max_ping_ms_(max_ping_ms) {
+        max_ping_ms_(max_ping_ms),
+        on_over_limit_(std::move(on_over_limit)) {
     thread_ = std::thread([this] { Run(); });
   }
 
@@ -241,11 +322,11 @@ class LatencyWatchdog final {
       if (++over_limit < 3) {
         continue;
       }
-      SPDLOG_WARN("{} is over the {} ms limit, restarting to switch server",
+      SPDLOG_WARN("{} is over the {} ms limit, switching server",
           DescribeServer(server_), max_ping_ms_);
-      // Сигнал процессу, а не вызывающему потоку: raise() в многопоточной
-      // программе доставляет его сторожу, где обработчика нет.
-      kill(getpid(), SIGTERM);
+      if (on_over_limit_) {
+        on_over_limit_();
+      }
       return;
     }
   }
@@ -260,6 +341,7 @@ class LatencyWatchdog final {
   const std::string sni_;
   const fptn::protocol::https::CensorshipStrategy censorship_strategy_;
   const int max_ping_ms_;
+  const std::function<void()> on_over_limit_;
 
   std::mutex mutex_;
   std::condition_variable cv_;
@@ -297,6 +379,9 @@ int main(int argc, char* argv[]) {
     using fptn::protocol::https::obfuscator::GetObfuscatorNames;
 
     argparse::ArgumentParser args("fptn-client", FPTN_VERSION);
+    args.add_argument("-c", "--config")
+        .default_value(std::string(""))
+        .help("Path to a JSON config file with the same keys as the flags");
     // Required arguments
     args.add_argument("--access-token")
         .append()
@@ -568,7 +653,7 @@ int main(int argc, char* argv[]) {
         .help("Routing table id used for SOCKS traffic (default: 1080)");
 
     try {
-      args.parse_args(argc, argv);
+      args.parse_args(ExpandConfigFile(argc, argv));
     } catch (const std::runtime_error& err) {
       std::cerr << err.what() << std::endl;
       std::cerr << args;
@@ -778,6 +863,22 @@ int main(int argc, char* argv[]) {
       SPDLOG_ERROR("--access-token is required");
       return EXIT_FAILURE;
     }
+    // Порт SOCKS открываем до выбора сервера: ZeroBlock ждёт готовности
+    // помощника считаные секунды, а логин-гонка идёт до минуты. Соединения
+    // полежат в backlog ядра, пока не поднимется туннель.
+    fptn::socks::Socks5ServerPtr socks_server;
+    if (socks_enabled) {
+      socks_server = std::make_unique<fptn::socks::Socks5Server>(
+          fptn::socks::Socks5Server::Config{
+              .listen_address = socks_address,
+              .listen_port = socks_port,
+              .tun_interface_name = tun_interface_name});
+      if (!socks_server->Listen()) {
+        SPDLOG_ERROR("Failed to open the SOCKS5 port");
+        return EXIT_FAILURE;
+      }
+    }
+
     fptn::utils::speed_estimator::ServerInfo selected_server;
     std::string pre_obtained_token;
     bool server_pinned = false;
@@ -963,7 +1064,6 @@ int main(int argc, char* argv[]) {
 
     /* SOCKS5 entry point for transparent proxies */
     std::unique_ptr<fptn::socks::PolicyRoute> policy_route;
-    fptn::socks::Socks5ServerPtr socks_server;
     if (socks_enabled) {
       // Dedicated routing table: the main one is left alone, the rule only
       // matches sockets bound to the tunnel address.
@@ -978,15 +1078,9 @@ int main(int argc, char* argv[]) {
         vpn_client.Stop();
         return EXIT_FAILURE;
       }
-      socks_server = std::make_unique<fptn::socks::Socks5Server>(
-          fptn::socks::Socks5Server::Config{
-              .listen_address = socks_address,
-              .listen_port = socks_port,
-              .tun_interface_name = tun_interface_name,
-              .tun_address_ipv4 = tun_interface_address_ipv4.ToString(),
-              .tun_address_ipv6 = tun_interface_address_ipv6.ToString(),
-              .dns_server_ipv4 = dns_server_ipv4.ToString()});
-      if (!socks_server->Start()) {
+      socks_server->SetTunnel(tun_interface_address_ipv4.ToString(),
+          tun_interface_address_ipv6.ToString(), dns_server_ipv4.ToString());
+      if (!socks_server->Serve()) {
         SPDLOG_ERROR("Failed to start SOCKS5 server");
         policy_route->Clean();
         vpn_client.Stop();
@@ -999,8 +1093,10 @@ int main(int argc, char* argv[]) {
     // again, and asking for it is the user's decision.
     std::unique_ptr<LatencyWatchdog> watchdog;
     if (max_ping > 0 && !server_pinned) {
-      watchdog = std::make_unique<LatencyWatchdog>(
-          selected_server, sni, censorship_strategy, max_ping);
+      watchdog = std::make_unique<LatencyWatchdog>(selected_server, sni,
+          censorship_strategy, max_ping, [&vpn_client]() {
+            vpn_client.Stop();
+          });
     }
     fptn::utils::WaitForSignal(vpn_client);
     watchdog.reset();

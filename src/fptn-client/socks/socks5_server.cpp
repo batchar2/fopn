@@ -159,17 +159,14 @@ boost::asio::awaitable<void> RefuseSession(
 
 }  // namespace
 
-Socks5Server::Socks5Server(Config config) : config_(std::move(config)) {
-  resolver_ = std::make_unique<TunnelResolver>(TunnelResolver::Config{
-      .dns_server_ipv4 = config_.dns_server_ipv4,
-      .bind_address_ipv4 = config_.tun_address_ipv4,
-  });
-}
+// Резолвер собирается в Serve(): к тому моменту известны адрес туннеля и DNS,
+// а до этого их может ещё не быть.
+Socks5Server::Socks5Server(Config config) : config_(std::move(config)) {}
 
 Socks5Server::~Socks5Server() { Stop(); }
 
-bool Socks5Server::Start() {
-  if (running_.load()) {
+bool Socks5Server::Listen() {
+  if (acceptor_) {
     return true;
   }
 
@@ -187,6 +184,7 @@ bool Socks5Server::Start() {
   acceptor_->open(endpoint.protocol(), ec);
   if (ec) {
     SPDLOG_ERROR("SOCKS5: acceptor open failed: {}", ec.message());
+    acceptor_.reset();
     return false;
   }
   acceptor_->set_option(boost::asio::socket_base::reuse_address(true), ec);
@@ -194,13 +192,41 @@ bool Socks5Server::Start() {
   if (ec) {
     SPDLOG_ERROR("SOCKS5: bind to {}:{} failed: {}", config_.listen_address,
         config_.listen_port, ec.message());
+    acceptor_.reset();
     return false;
   }
   acceptor_->listen(boost::asio::socket_base::max_listen_connections, ec);
   if (ec) {
     SPDLOG_ERROR("SOCKS5: listen failed: {}", ec.message());
+    acceptor_.reset();
     return false;
   }
+
+  SPDLOG_INFO("SOCKS5 port {}:{} is open, waiting for the tunnel",
+      config_.listen_address, config_.listen_port);
+  return true;
+}
+
+void Socks5Server::SetTunnel(const std::string& tun_address_ipv4,
+    const std::string& tun_address_ipv6,
+    const std::string& dns_server_ipv4) {
+  config_.tun_address_ipv4 = tun_address_ipv4;
+  config_.tun_address_ipv6 = tun_address_ipv6;
+  config_.dns_server_ipv4 = dns_server_ipv4;
+}
+
+bool Socks5Server::Serve() {
+  if (running_.load()) {
+    return true;
+  }
+  if (!acceptor_ && !Listen()) {
+    return false;
+  }
+
+  resolver_ = std::make_unique<TunnelResolver>(TunnelResolver::Config{
+      .dns_server_ipv4 = config_.dns_server_ipv4,
+      .bind_address_ipv4 = config_.tun_address_ipv4,
+  });
 
   running_.store(true);
   boost::asio::co_spawn(
@@ -220,6 +246,8 @@ bool Socks5Server::Start() {
       config_.tun_address_ipv4);
   return true;
 }
+
+bool Socks5Server::Start() { return Listen() && Serve(); }
 
 void Socks5Server::Stop() {
   if (!running_.exchange(false)) {
