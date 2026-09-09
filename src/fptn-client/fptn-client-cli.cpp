@@ -97,16 +97,29 @@ void RaiseFileDescriptorLimit() {}
 // разбор, типы и умолчания остаются общими. Флаги, заданные в командной
 // строке, идут после и перекрывают файл.
 std::vector<std::string> ExpandConfigFile(int argc, char* argv[]) {
+  // Имена ключей пишут и через дефис, и через подчёркивание; для разбора это
+  // один и тот же флаг.
+  const auto normalize = [](std::string name) {
+    if (name.starts_with("--")) {
+      std::replace(name.begin(), name.end(), '_', '-');
+    }
+    return name;
+  };
+
   std::vector<std::string> expanded;
   std::vector<std::string> rest;
+  std::set<std::string> from_command_line;
   std::string config_path;
 
   expanded.emplace_back(argv[0]);
   for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
+    const std::string arg = normalize(argv[i]);
     if ((arg == "-c" || arg == "--config") && i + 1 < argc) {
       config_path = argv[++i];
       continue;
+    }
+    if (arg.starts_with("--")) {
+      from_command_line.insert(arg);
     }
     rest.push_back(arg);
   }
@@ -149,9 +162,8 @@ std::vector<std::string> ExpandConfigFile(int argc, char* argv[]) {
     return false;
   };
 
-  const auto to_flag = [](std::string key) {
-    std::replace(key.begin(), key.end(), '_', '-');
-    return "--" + key;
+  const auto to_flag = [&normalize](const std::string& key) {
+    return normalize("--" + key);
   };
   const auto append_value = [&expanded](
                                 const std::string& flag,
@@ -169,6 +181,11 @@ std::vector<std::string> ExpandConfigFile(int argc, char* argv[]) {
   for (const auto& [key, value] : doc.items()) {
     const std::string flag = to_flag(key);
     if (value.is_null()) {
+      continue;
+    }
+    // Тот же флаг в командной строке главнее файла. Пропускаем его здесь, а не
+    // полагаемся на порядок: повтор одного аргумента разбор не переживает.
+    if (from_command_line.contains(flag)) {
       continue;
     }
     if (is_flag_only(flag)) {
