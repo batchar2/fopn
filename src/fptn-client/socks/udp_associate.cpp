@@ -7,12 +7,14 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include "fptn-client/socks/udp_associate.h"
 
 #include <cstring>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
+#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/redirect_error.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <spdlog/spdlog.h>  // NOLINT(build/include_order)
@@ -125,7 +127,8 @@ UdpAssociate::UdpAssociate(boost::asio::any_io_executor executor,
       config_(std::move(config)),
       resolver_(resolver),
       session_id_(session_id),
-      relay_(executor_) {}
+      relay_(executor_),
+      sweep_timer_(executor_) {}  // NOLINT(whitespace/indent_namespace)
 
 UdpAssociate::~UdpAssociate() { Close(); }
 
@@ -161,6 +164,7 @@ void UdpAssociate::Close() {
   }
   closed_ = true;
   boost::system::error_code ec;
+  sweep_timer_.cancel();
   relay_.close(ec);
   for (auto& [key, session] : sessions_) {
     session->socket.close(ec);
@@ -169,6 +173,13 @@ void UdpAssociate::Close() {
 }
 
 boost::asio::awaitable<void> UdpAssociate::Run() {
+  using boost::asio::experimental::awaitable_operators::operator||;
+
+  // Приём и уборка идут рядом: заканчивается ассоциация вместе с приёмом.
+  co_await(ReceiveDatagrams() || SweepLoop());
+}
+
+boost::asio::awaitable<void> UdpAssociate::ReceiveDatagrams() {
   std::vector<std::uint8_t> buffer(kBufferSize);
   boost::system::error_code ec;
   for (;;) {
@@ -179,8 +190,20 @@ boost::asio::awaitable<void> UdpAssociate::Run() {
     if (ec) {
       break;
     }
-    SweepIdle();
     co_await HandleDatagram(from, buffer.data(), size);
+  }
+}
+
+boost::asio::awaitable<void> UdpAssociate::SweepLoop() {
+  boost::system::error_code ec;
+  while (!closed_) {
+    sweep_timer_.expires_after(config_.sweep_interval);
+    co_await sweep_timer_.async_wait(
+        boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (ec) {
+      break;
+    }
+    SweepIdle();
   }
 }
 
@@ -233,6 +256,9 @@ boost::asio::awaitable<void> UdpAssociate::HandleDatagram(
   if (ec) {
     SPDLOG_DEBUG("SOCKS5[{}]: UDP send to {}:{} failed: {}", session_id_,
         target.address().to_string(), target.port(), ec.message());
+    // Сокет, на котором отправка уже не проходит, дальше не пригодится:
+    // держать его до истечения таймаута - значит держать дескриптор впустую.
+    Drop(key);
   }
 }
 
@@ -326,6 +352,16 @@ boost::asio::awaitable<void> UdpAssociate::ReceiveLoop(Key key) {
       break;
     }
   }
+}
+
+void UdpAssociate::Drop(const Key& key) {
+  const auto it = sessions_.find(key);
+  if (it == sessions_.end()) {
+    return;
+  }
+  boost::system::error_code ec;
+  it->second->socket.close(ec);
+  sessions_.erase(it);
 }
 
 void UdpAssociate::SweepIdle() {

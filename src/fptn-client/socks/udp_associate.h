@@ -11,6 +11,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/ip/udp.hpp>
@@ -30,6 +31,9 @@ class UdpAssociate {
     std::string tun_address_ipv4;
     std::string tun_address_ipv6;
     std::chrono::seconds session_timeout{60};
+    // Уборка идёт по своему таймеру, а не на каждой датаграмме: молчащий
+    // клиент иначе оставлял бы сокеты целей открытыми до конца ассоциации.
+    std::chrono::seconds sweep_interval{15};
     // Сокет на каждую цель: без потолка одна ассоциация с активным QUIC
     // способна съесть все дескрипторы процесса.
     std::size_t max_sessions = 128;
@@ -75,11 +79,17 @@ class UdpAssociate {
       const std::uint8_t* data,
       std::size_t size);
 
+  boost::asio::awaitable<void> ReceiveDatagrams();
+
   boost::asio::awaitable<void> ReceiveLoop(Key key);
+
+  boost::asio::awaitable<void> SweepLoop();
 
   Session* FindOrCreate(const Key& key,
       const boost::asio::ip::udp::endpoint& client,
       boost::system::error_code& ec);
+
+  void Drop(const Key& key);
 
   void SweepIdle();
 
@@ -89,6 +99,7 @@ class UdpAssociate {
   std::uint64_t session_id_;
 
   boost::asio::ip::udp::socket relay_;
+  boost::asio::steady_timer sweep_timer_;
   boost::asio::ip::udp::endpoint bound_;
   // Learned from the first datagram: clients announce zeroes in practice.
   boost::asio::ip::udp::endpoint client_;

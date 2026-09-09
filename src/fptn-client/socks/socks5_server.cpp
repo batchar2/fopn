@@ -6,12 +6,13 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include "fptn-client/socks/socks5_server.h"
 
-#include "fptn-client/socks/udp_associate.h"
-
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
+#include <iterator>
+#include <memory>
 #include <random>
 #include <string>
 #include <utility>
@@ -30,6 +31,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <spdlog/spdlog.h>  // NOLINT(build/include_order)
 
 #include "common/system/command.h"
+#include "fptn-client/socks/udp_associate.h"
 #include "fptn-protocol-lib/https/socket_options.h"
 
 namespace fptn::socks {
@@ -56,7 +58,9 @@ constexpr std::uint8_t kRepTtlExpired = 0x06;
 constexpr std::uint8_t kRepCommandNotSupported = 0x07;
 constexpr std::uint8_t kRepAddressNotSupported = 0x08;
 
-constexpr std::size_t kRelayBufferSize = 32 * 1024;
+// По буферу на каждое направление, то есть два на сессию: при потолке в 512
+// сессий 32 КБ обошлись бы в 32 МБ только на релей.
+constexpr std::size_t kRelayBufferSize = 16 * 1024;
 
 // Потолок паузы между попытками принять соединение, когда кончились
 // дескрипторы.
@@ -456,7 +460,7 @@ boost::asio::awaitable<void> Socks5Server::HandleSession(
       std::chrono::milliseconds(config_.connect_timeout_ms));
   boost::system::error_code connect_ec;
   boost::system::error_code timer_ec;
-  const auto outcome = co_await (
+  const auto outcome = co_await(
       remote.async_connect(target,
           boost::asio::redirect_error(boost::asio::use_awaitable,
               connect_ec)) ||
@@ -491,7 +495,7 @@ boost::asio::awaitable<void> Socks5Server::HandleSession(
   // срабатывает, обе стороны закрываются и релеи выходят по ошибке.
   boost::asio::steady_timer idle(executor);
   idle.expires_after(config_.idle_timeout);
-  co_await (Relay(client, remote, idle) && Relay(remote, client, idle) &&
+  co_await(Relay(client, remote, idle) && Relay(remote, client, idle) &&
             WatchIdle(idle, client, remote));
 
   client.close(ec);
@@ -582,7 +586,7 @@ boost::asio::awaitable<void> Socks5Server::HandleUdpAssociate(
 
   // Reading the control connection is how its close is noticed; a compliant
   // client sends nothing on it, so any byte just keeps the wait alive.
-  co_await (associate.Run() || WaitForClose(client));
+  co_await(associate.Run() || WaitForClose(client));
   associate.Close();
 }
 
@@ -605,6 +609,7 @@ constexpr std::uint16_t kTypeA = 1;
 constexpr std::uint16_t kTypeAAAA = 28;
 constexpr std::size_t kHeaderSize = 12;
 constexpr std::size_t kMaxResponseSize = 1500;
+constexpr std::size_t kMaxTcpResponseSize = 8 * 1024;
 
 void PutU16(std::vector<std::uint8_t>& out, std::uint16_t value) {
   out.push_back(static_cast<std::uint8_t>(value >> 8));
@@ -633,8 +638,8 @@ bool EncodeName(const std::string& host, std::vector<std::uint8_t>& out) {
       return false;
     }
     out.push_back(static_cast<std::uint8_t>(len));
-    out.insert(out.end(), host.begin() + static_cast<long>(start),
-        host.begin() + static_cast<long>(end));
+    out.insert(out.end(), host.begin() + static_cast<std::ptrdiff_t>(start),
+        host.begin() + static_cast<std::ptrdiff_t>(end));
     if (dot == std::string::npos) {
       break;
     }
@@ -665,43 +670,215 @@ bool SkipName(const std::uint8_t* data, std::size_t size, std::size_t& offset) {
 
 TunnelResolver::TunnelResolver(Config config) : config_(std::move(config)) {}
 
+bool TunnelResolver::LookupCache(
+    const std::string& host, std::vector<boost::asio::ip::address>* out) {
+  const auto it = cache_.find(host);
+  if (it == cache_.end()) {
+    return false;
+  }
+  if (it->second.expires_at <= std::chrono::steady_clock::now()) {
+    cache_.erase(it);
+    return false;
+  }
+  *out = it->second.addresses;
+  return true;
+}
+
+void TunnelResolver::StoreCache(const std::string& host,
+    const std::vector<boost::asio::ip::address>& addresses,
+    std::chrono::seconds ttl) {
+  if (addresses.empty()) {
+    return;
+  }
+  ttl = std::clamp(ttl, config_.min_ttl, config_.max_ttl);
+
+  // Кэш на роутере не должен расти без предела. Сначала выбрасываем протухшее,
+  // и только если это не помогло - самую близкую к истечению запись.
+  if (cache_.size() >= config_.max_cache_entries) {
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = cache_.begin(); it != cache_.end();) {
+      it = (it->second.expires_at <= now) ? cache_.erase(it) : std::next(it);
+    }
+  }
+  if (cache_.size() >= config_.max_cache_entries) {
+    auto oldest = std::min_element(cache_.begin(), cache_.end(),
+        [](const auto& a, const auto& b) {
+          return a.second.expires_at < b.second.expires_at;
+        });
+    if (oldest != cache_.end()) {
+      cache_.erase(oldest);
+    }
+  }
+
+  cache_[host] = CacheEntry{addresses, std::chrono::steady_clock::now() + ttl};
+}
+
+void TunnelResolver::ReportReachable(bool reachable, const std::string& host) {
+  if (reachable) {
+    if (dns_unreachable_) {
+      dns_unreachable_ = false;
+      SPDLOG_INFO("TunnelResolver: DNS {} answers again",
+          config_.dns_server_ipv4);
+    }
+    return;
+  }
+  if (!dns_unreachable_) {
+    dns_unreachable_ = true;
+    SPDLOG_WARN("TunnelResolver: DNS {} is not answering (first miss: '{}')",
+        config_.dns_server_ipv4, host);
+  }
+}
+
 boost::asio::awaitable<std::vector<boost::asio::ip::address>>
 TunnelResolver::Resolve(std::string host) {
   if (!host.empty() && host.back() == '.') {
     host.pop_back();
   }
 
-  auto result = co_await Query(host, kTypeA);
-  if (result.empty()) {
-    result = co_await Query(host, kTypeAAAA);
+  std::vector<boost::asio::ip::address> cached;
+  if (LookupCache(host, &cached)) {
+    co_return cached;
   }
-  co_return result;
+
+  auto answer = co_await Query(host, kTypeA);
+  if (answer.answered && answer.addresses.empty()) {
+    answer = co_await Query(host, kTypeAAAA);
+  }
+  if (!answer.answered) {
+    co_return std::vector<boost::asio::ip::address>{};
+  }
+
+  StoreCache(host, answer.addresses, answer.ttl);
+  co_return answer.addresses;
 }
 
-boost::asio::awaitable<std::vector<boost::asio::ip::address>>
-TunnelResolver::Query(const std::string& host, std::uint16_t qtype) {
+boost::asio::awaitable<TunnelResolver::Answer> TunnelResolver::Query(
+    const std::string& host, std::uint16_t qtype) {
+  const int attempts = std::max(1, config_.attempts);
+  Answer answer;
+
+  for (int attempt = 0; attempt < attempts; ++attempt) {
+    answer = co_await QueryOverUdp(host, qtype);
+    if (answer.truncated) {
+      // Ответ не поместился в датаграмму - добираем его по TCP, как велит
+      // RFC 1035; повторять по UDP смысла нет, придёт то же усечение.
+      answer = co_await QueryOverTcp(host, qtype);
+      break;
+    }
+    if (answer.answered) {
+      break;
+    }
+  }
+
+  ReportReachable(answer.answered, host);
+  co_return answer;
+}
+
+namespace {
+
+// Собирает запрос без длины: для TCP она приписывается отдельно.
+bool BuildQuery(const std::string& host, std::uint16_t qtype,
+    std::uint16_t query_id, std::vector<std::uint8_t>* out) {
+  out->clear();
+  out->reserve(64);
+  PutU16(*out, query_id);
+  PutU16(*out, 0x0100);  // RD - recursion desired
+  PutU16(*out, 1);       // QDCOUNT
+  PutU16(*out, 0);       // ANCOUNT
+  PutU16(*out, 0);       // NSCOUNT
+  PutU16(*out, 0);       // ARCOUNT
+  if (!EncodeName(host, *out)) {
+    return false;
+  }
+  PutU16(*out, qtype);
+  PutU16(*out, 1);  // IN
+  return true;
+}
+
+std::uint16_t MakeQueryId() {
+  static thread_local std::random_device device;
+  static thread_local std::mt19937 rng(device());
+  return static_cast<std::uint16_t>(
+      std::uniform_int_distribution<int>(1, 0xFFFF)(rng));
+}
+
+}  // namespace
+
+TunnelResolver::Answer TunnelResolver::ParseResponse(const std::uint8_t* data,
+    std::size_t size, std::uint16_t query_id, const std::string& host) {
+  TunnelResolver::Answer answer;
+  if (size < kHeaderSize || GetU16(data) != query_id) {
+    SPDLOG_WARN("TunnelResolver: bad response for '{}'", host);
+    return answer;
+  }
+
+  answer.answered = true;
+  answer.truncated = (data[2] & 0x02) != 0;
+
+  const std::uint16_t qdcount = GetU16(data + 4);
+  const std::uint16_t ancount = GetU16(data + 6);
+
+  std::size_t offset = kHeaderSize;
+  for (std::uint16_t i = 0; i < qdcount; ++i) {
+    if (!SkipName(data, size, offset)) {
+      return answer;
+    }
+    offset += 4;  // QTYPE + QCLASS
+  }
+
+  std::uint32_t min_ttl = 0;
+  for (std::uint16_t i = 0; i < ancount && offset + 10 <= size; ++i) {
+    if (!SkipName(data, size, offset)) {
+      break;
+    }
+    if (offset + 10 > size) {
+      break;
+    }
+    const std::uint16_t rtype = GetU16(data + offset);
+    const std::uint32_t ttl =
+        (static_cast<std::uint32_t>(GetU16(data + offset + 4)) << 16) |
+        GetU16(data + offset + 6);
+    const std::uint16_t rdlength = GetU16(data + offset + 8);
+    offset += 10;
+    if (offset + rdlength > size) {
+      break;
+    }
+    if (rtype == kTypeA && rdlength == 4) {
+      boost::asio::ip::address_v4::bytes_type bytes{};
+      std::memcpy(bytes.data(), data + offset, bytes.size());
+      answer.addresses.emplace_back(boost::asio::ip::address_v4(bytes));
+    } else if (rtype == kTypeAAAA && rdlength == 16) {
+      boost::asio::ip::address_v6::bytes_type bytes{};
+      std::memcpy(bytes.data(), data + offset, bytes.size());
+      answer.addresses.emplace_back(boost::asio::ip::address_v6(bytes));
+    } else {
+      offset += rdlength;
+      continue;
+    }
+    // Срок жизни набора - по самой недолговечной записи в нём.
+    min_ttl = (min_ttl == 0) ? ttl : std::min(min_ttl, ttl);
+    offset += rdlength;
+  }
+
+  answer.ttl = std::chrono::seconds(min_ttl);
+  SPDLOG_DEBUG("TunnelResolver: '{}' -> {} address(es), ttl {}s", host,
+      answer.addresses.size(), min_ttl);
+  return answer;
+}
+
+boost::asio::awaitable<TunnelResolver::Answer> TunnelResolver::QueryOverUdp(
+    const std::string& host, std::uint16_t qtype) {
   using boost::asio::experimental::awaitable_operators::operator||;
 
-  std::vector<boost::asio::ip::address> addresses;
-
-  static thread_local std::mt19937 rng{std::random_device{}()};
-  const auto query_id = static_cast<std::uint16_t>(
-      std::uniform_int_distribution<int>(1, 0xFFFF)(rng));
+  Answer answer;
+  const auto query_id = MakeQueryId();
 
   std::vector<std::uint8_t> request;
-  request.reserve(64);
-  PutU16(request, query_id);
-  PutU16(request, 0x0100);  // RD - recursion desired
-  PutU16(request, 1);       // QDCOUNT
-  PutU16(request, 0);       // ANCOUNT
-  PutU16(request, 0);       // NSCOUNT
-  PutU16(request, 0);       // ARCOUNT
-  if (!EncodeName(host, request)) {
+  if (!BuildQuery(host, qtype, query_id, &request)) {
     SPDLOG_WARN("TunnelResolver: bad hostname '{}'", host);
-    co_return addresses;
+    answer.answered = true;  // имя негодное, повторять нечего
+    co_return answer;
   }
-  PutU16(request, qtype);
-  PutU16(request, 1);  // IN
 
   boost::system::error_code ec;
   auto executor = co_await boost::asio::this_coro::executor;
@@ -710,7 +887,7 @@ TunnelResolver::Query(const std::string& host, std::uint16_t qtype) {
   socket.open(boost::asio::ip::udp::v4(), ec);
   if (ec) {
     SPDLOG_ERROR("TunnelResolver: socket open failed: {}", ec.message());
-    co_return addresses;
+    co_return answer;
   }
   fptn::protocol::https::ApplyRoutingMark(socket.native_handle());
 
@@ -722,7 +899,7 @@ TunnelResolver::Query(const std::string& host, std::uint16_t qtype) {
       if (ec) {
         SPDLOG_ERROR("TunnelResolver: bind to {} failed: {}",
             config_.bind_address_ipv4, ec.message());
-        co_return addresses;
+        co_return answer;
       }
     }
   }
@@ -732,15 +909,15 @@ TunnelResolver::Query(const std::string& host, std::uint16_t qtype) {
   if (ec) {
     SPDLOG_ERROR("TunnelResolver: bad DNS server address '{}'",
         config_.dns_server_ipv4);
-    co_return addresses;
+    co_return answer;
   }
   const boost::asio::ip::udp::endpoint dns_endpoint(dns_addr, 53);
 
   co_await socket.async_send_to(boost::asio::buffer(request), dns_endpoint,
       boost::asio::redirect_error(boost::asio::use_awaitable, ec));
   if (ec) {
-    SPDLOG_WARN("TunnelResolver: send failed: {}", ec.message());
-    co_return addresses;
+    SPDLOG_DEBUG("TunnelResolver: send failed: {}", ec.message());
+    co_return answer;
   }
 
   std::array<std::uint8_t, kMaxResponseSize> response{};
@@ -748,72 +925,129 @@ TunnelResolver::Query(const std::string& host, std::uint16_t qtype) {
   boost::asio::steady_timer timer(executor);
   timer.expires_after(std::chrono::milliseconds(config_.timeout_ms));
 
-  std::size_t received = 0;
   boost::system::error_code recv_ec;
-  const auto outcome = co_await (
+  const auto outcome = co_await(
       socket.async_receive_from(boost::asio::buffer(response), from,
           boost::asio::redirect_error(boost::asio::use_awaitable, recv_ec)) ||
       timer.async_wait(
           boost::asio::redirect_error(boost::asio::use_awaitable, ec)));
 
   if (outcome.index() == 1) {
-    SPDLOG_WARN("TunnelResolver: timeout resolving '{}' via {}", host,
+    SPDLOG_DEBUG("TunnelResolver: timeout resolving '{}' via {}", host,
         config_.dns_server_ipv4);
     socket.close(ec);
-    co_return addresses;
+    co_return answer;
   }
-  received = std::get<0>(outcome);
+  const std::size_t received = std::get<0>(outcome);
   if (recv_ec || received < kHeaderSize) {
-    SPDLOG_WARN("TunnelResolver: receive failed for '{}': {}", host,
+    SPDLOG_DEBUG("TunnelResolver: receive failed for '{}': {}", host,
         recv_ec.message());
-    co_return addresses;
+    co_return answer;
   }
 
-  const std::uint8_t* data = response.data();
-  if (GetU16(data) != query_id) {
-    SPDLOG_WARN("TunnelResolver: response id mismatch for '{}'", host);
-    co_return addresses;
-  }
-  const std::uint16_t qdcount = GetU16(data + 4);
-  const std::uint16_t ancount = GetU16(data + 6);
-
-  std::size_t offset = kHeaderSize;
-  for (std::uint16_t i = 0; i < qdcount; ++i) {
-    if (!SkipName(data, received, offset)) {
-      co_return addresses;
-    }
-    offset += 4;  // QTYPE + QCLASS
-  }
-
-  for (std::uint16_t i = 0; i < ancount && offset + 10 <= received; ++i) {
-    if (!SkipName(data, received, offset)) {
-      break;
-    }
-    if (offset + 10 > received) {
-      break;
-    }
-    const std::uint16_t rtype = GetU16(data + offset);
-    const std::uint16_t rdlength = GetU16(data + offset + 8);
-    offset += 10;
-    if (offset + rdlength > received) {
-      break;
-    }
-    if (rtype == kTypeA && rdlength == 4) {
-      boost::asio::ip::address_v4::bytes_type bytes{};
-      std::memcpy(bytes.data(), data + offset, bytes.size());
-      addresses.emplace_back(boost::asio::ip::address_v4(bytes));
-    } else if (rtype == kTypeAAAA && rdlength == 16) {
-      boost::asio::ip::address_v6::bytes_type bytes{};
-      std::memcpy(bytes.data(), data + offset, bytes.size());
-      addresses.emplace_back(boost::asio::ip::address_v6(bytes));
-    }
-    offset += rdlength;
-  }
-
-  SPDLOG_DEBUG(
-      "TunnelResolver: '{}' -> {} address(es)", host, addresses.size());
-  co_return addresses;
+  co_return ParseResponse(response.data(), received, query_id, host);
 }
+
+boost::asio::awaitable<TunnelResolver::Answer> TunnelResolver::QueryOverTcp(
+    const std::string& host, std::uint16_t qtype) {
+  using boost::asio::experimental::awaitable_operators::operator||;
+
+  Answer answer;
+  const auto query_id = MakeQueryId();
+
+  std::vector<std::uint8_t> body;
+  if (!BuildQuery(host, qtype, query_id, &body)) {
+    answer.answered = true;
+    co_return answer;
+  }
+  std::vector<std::uint8_t> request;
+  request.reserve(body.size() + 2);
+  PutU16(request, static_cast<std::uint16_t>(body.size()));
+  request.insert(request.end(), body.begin(), body.end());
+
+  boost::system::error_code ec;
+  auto executor = co_await boost::asio::this_coro::executor;
+
+  const auto dns_addr =
+      boost::asio::ip::make_address(config_.dns_server_ipv4, ec);
+  if (ec) {
+    co_return answer;
+  }
+
+  boost::asio::ip::tcp::socket socket(executor);
+  socket.open(boost::asio::ip::tcp::v4(), ec);
+  if (ec) {
+    co_return answer;
+  }
+  fptn::protocol::https::ApplyRoutingMark(socket.native_handle());
+
+  if (!config_.bind_address_ipv4.empty()) {
+    const auto bind_addr =
+        boost::asio::ip::make_address(config_.bind_address_ipv4, ec);
+    if (!ec) {
+      socket.bind(boost::asio::ip::tcp::endpoint(bind_addr, 0), ec);
+    }
+  }
+
+  boost::asio::steady_timer timer(executor);
+  timer.expires_after(std::chrono::milliseconds(config_.timeout_ms));
+
+  const boost::asio::ip::tcp::endpoint dns_endpoint(dns_addr, 53);
+  boost::system::error_code op_ec;
+  // Каждое ожидание даёт свой тип variant, поэтому переменные разные.
+  const auto connect_outcome = co_await(
+      socket.async_connect(dns_endpoint,
+          boost::asio::redirect_error(boost::asio::use_awaitable, op_ec)) ||
+      timer.async_wait(
+          boost::asio::redirect_error(boost::asio::use_awaitable, ec)));
+  if (connect_outcome.index() == 1 || op_ec) {
+    SPDLOG_DEBUG("TunnelResolver: TCP connect to {} failed for '{}'",
+        config_.dns_server_ipv4, host);
+    socket.close(ec);
+    co_return answer;
+  }
+
+  co_await boost::asio::async_write(socket, boost::asio::buffer(request),
+      boost::asio::redirect_error(boost::asio::use_awaitable, op_ec));
+  if (op_ec) {
+    socket.close(ec);
+    co_return answer;
+  }
+
+  std::array<std::uint8_t, 2> length_buf{};
+  const auto length_outcome = co_await(
+      boost::asio::async_read(socket, boost::asio::buffer(length_buf),
+          boost::asio::redirect_error(boost::asio::use_awaitable, op_ec)) ||
+      timer.async_wait(
+          boost::asio::redirect_error(boost::asio::use_awaitable, ec)));
+  if (length_outcome.index() == 1 || op_ec) {
+    socket.close(ec);
+    co_return answer;
+  }
+
+  const std::size_t length = GetU16(length_buf.data());
+  if (length < kHeaderSize || length > kMaxTcpResponseSize) {
+    socket.close(ec);
+    co_return answer;
+  }
+
+  std::vector<std::uint8_t> response(length);
+  const auto body_outcome = co_await(
+      boost::asio::async_read(socket, boost::asio::buffer(response),
+          boost::asio::redirect_error(boost::asio::use_awaitable, op_ec)) ||
+      timer.async_wait(
+          boost::asio::redirect_error(boost::asio::use_awaitable, ec)));
+  socket.close(ec);
+  if (body_outcome.index() == 1 || op_ec) {
+    co_return answer;
+  }
+
+  answer = ParseResponse(response.data(), response.size(), query_id, host);
+  // По TCP усечения не бывает - флаг из ответа тут только запутает вызывающего.
+  answer.truncated = false;
+  co_return answer;
+}
+
 
 namespace {
 

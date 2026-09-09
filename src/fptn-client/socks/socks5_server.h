@@ -12,6 +12,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <boost/asio/awaitable.hpp>
@@ -53,6 +54,13 @@ class TunnelResolver {
     std::string dns_server_ipv4;
     std::string bind_address_ipv4;
     int timeout_ms = 4000;
+    // Запрос уходит внутрь тоннеля, поэтому промах кэша стоит целого круга до
+    // резолвера. Ответ живёт по своему TTL, зажатому в эти границы.
+    std::chrono::seconds min_ttl{10};
+    std::chrono::seconds max_ttl{600};
+    std::size_t max_cache_entries = 512;
+    // Датаграмма теряется тихо, поэтому одну потерю переживаем повтором.
+    int attempts = 2;
   };
 
   explicit TunnelResolver(Config config);
@@ -63,10 +71,44 @@ class TunnelResolver {
       std::string host);
 
  private:
-  boost::asio::awaitable<std::vector<boost::asio::ip::address>> Query(
+  struct Answer {
+    std::vector<boost::asio::ip::address> addresses;
+    std::chrono::seconds ttl{0};
+    // Пустой ответ и молчание резолвера - разные вещи: первый кэшируем,
+    // второй заставляет пробовать снова.
+    bool answered = false;
+    bool truncated = false;
+  };
+
+  struct CacheEntry {
+    std::vector<boost::asio::ip::address> addresses;
+    std::chrono::steady_clock::time_point expires_at;
+  };
+
+  // Транспорт значения не имеет: разбирается уже принятое сообщение.
+  static Answer ParseResponse(const std::uint8_t* data, std::size_t size,
+      std::uint16_t query_id, const std::string& host);
+
+  boost::asio::awaitable<Answer> Query(
+      const std::string& host, std::uint16_t qtype);
+  boost::asio::awaitable<Answer> QueryOverUdp(
+      const std::string& host, std::uint16_t qtype);
+  boost::asio::awaitable<Answer> QueryOverTcp(
       const std::string& host, std::uint16_t qtype);
 
+  bool LookupCache(
+      const std::string& host, std::vector<boost::asio::ip::address>* out);
+  void StoreCache(const std::string& host,
+      const std::vector<boost::asio::ip::address>& addresses,
+      std::chrono::seconds ttl);
+  // Один и тот же обрыв связи повторяется на каждом соединении; в лог он
+  // попадает по разу на переход состояния.
+  void ReportReachable(bool reachable, const std::string& host);
+
   Config config_;
+  // Резолвер живёт только в потоке io_context сервера, поэтому без блокировок.
+  std::unordered_map<std::string, CacheEntry> cache_;
+  bool dns_unreachable_ = false;
 };
 
 // SOCKS5 entry point for coexistence with a transparent proxy in front of the
@@ -104,8 +146,8 @@ class Socks5Server {
   boost::asio::awaitable<void> AcceptLoop();
   boost::asio::awaitable<void> HandleSession(
       boost::asio::ip::tcp::socket client);
-  // Возвращает false, когда сессия оборвалась по простою: вызывающий тогда
-  // закрывает обе стороны, а не ждёт вторую половину релея.
+  // Каждое чтение отодвигает таймер простоя; когда он всё-таки срабатывает,
+  // WatchIdle закрывает обе стороны и релей завершается сам.
   boost::asio::awaitable<void> Relay(boost::asio::ip::tcp::socket& from,
       boost::asio::ip::tcp::socket& to,
       boost::asio::steady_timer& idle);
