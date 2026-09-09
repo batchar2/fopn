@@ -114,6 +114,45 @@ boost::asio::awaitable<void> SendReplyWithEndpoint(
       boost::asio::redirect_error(boost::asio::use_awaitable, ec));
 }
 
+
+// Проходит приветствие и отвечает отказом с кодом: клиент, уже отправивший
+// запрос, получает внятную ошибку вместо закрытого сокета.
+boost::asio::awaitable<void> RefuseSession(
+    boost::asio::ip::tcp::socket& client, std::uint8_t reply) {
+  boost::system::error_code ec;
+
+  std::array<std::uint8_t, 2> greeting{};
+  co_await boost::asio::async_read(client, boost::asio::buffer(greeting),
+      boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+  if (ec || greeting[0] != kVersion) {
+    co_return;
+  }
+  std::vector<std::uint8_t> methods(greeting[1]);
+  if (greeting[1] > 0) {
+    co_await boost::asio::async_read(client, boost::asio::buffer(methods),
+        boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (ec) {
+      co_return;
+    }
+  }
+  const std::array<std::uint8_t, 2> method_reply{kVersion, kAuthNone};
+  co_await boost::asio::async_write(client, boost::asio::buffer(method_reply),
+      boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+  if (ec) {
+    co_return;
+  }
+
+  // Запрос дочитывать не обязательно: ответ с кодом отказа допустим в любой
+  // момент после согласования метода.
+  const std::array<std::uint8_t, 10> response{
+      kVersion, reply, 0x00, kAtypIPv4, 0, 0, 0, 0, 0, 0};
+  co_await boost::asio::async_write(client, boost::asio::buffer(response),
+      boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+
+  boost::system::error_code ignored;
+  client.close(ignored);
+}
+
 }  // namespace
 
 Socks5Server::Socks5Server(Config config) : config_(std::move(config)) {
@@ -237,8 +276,15 @@ boost::asio::awaitable<void> Socks5Server::AcceptLoop() {
     if (active_sessions_.load() >= config_.max_sessions) {
       SPDLOG_WARN("SOCKS5: session limit {} reached, refusing",
           config_.max_sessions);
-      boost::system::error_code ignored;
-      client.close(ignored);
+      // Отказ доводится до клиента по протоколу: он получит ошибку сразу, а не
+      // будет ждать таймаута на оборванном соединении.
+      boost::asio::co_spawn(
+          ioc_,
+          [sock = std::move(client)]() mutable
+          -> boost::asio::awaitable<void> {
+            co_await RefuseSession(sock, kRepGeneralFailure);
+          },
+          boost::asio::detached);
       continue;
     }
 
