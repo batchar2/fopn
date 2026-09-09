@@ -15,7 +15,6 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/ip/udp.hpp>
-#include <boost/asio/steady_timer.hpp>
 
 #include "fptn-client/socks/socks5_server.h"
 
@@ -79,11 +78,7 @@ class UdpAssociate {
       const std::uint8_t* data,
       std::size_t size);
 
-  boost::asio::awaitable<void> ReceiveDatagrams();
-
   boost::asio::awaitable<void> ReceiveLoop(Key key);
-
-  boost::asio::awaitable<void> SweepLoop();
 
   Session* FindOrCreate(const Key& key,
       const boost::asio::ip::udp::endpoint& client,
@@ -99,7 +94,6 @@ class UdpAssociate {
   std::uint64_t session_id_;
 
   boost::asio::ip::udp::socket relay_;
-  boost::asio::steady_timer sweep_timer_;
   boost::asio::ip::udp::endpoint bound_;
   // Learned from the first datagram: clients announce zeroes in practice.
   boost::asio::ip::udp::endpoint client_;

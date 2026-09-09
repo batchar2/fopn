@@ -14,7 +14,6 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/redirect_error.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <spdlog/spdlog.h>  // NOLINT(build/include_order)
@@ -127,8 +126,7 @@ UdpAssociate::UdpAssociate(boost::asio::any_io_executor executor,
       config_(std::move(config)),
       resolver_(resolver),
       session_id_(session_id),
-      relay_(executor_),
-      sweep_timer_(executor_) {}  // NOLINT(whitespace/indent_namespace)
+      relay_(executor_) {}  // NOLINT(whitespace/indent_namespace)
 
 UdpAssociate::~UdpAssociate() { Close(); }
 
@@ -164,7 +162,6 @@ void UdpAssociate::Close() {
   }
   closed_ = true;
   boost::system::error_code ec;
-  sweep_timer_.cancel();
   relay_.close(ec);
   for (auto& [key, session] : sessions_) {
     session->socket.close(ec);
@@ -173,15 +170,12 @@ void UdpAssociate::Close() {
 }
 
 boost::asio::awaitable<void> UdpAssociate::Run() {
-  using boost::asio::experimental::awaitable_operators::operator||;
-
-  // Приём и уборка идут рядом: заканчивается ассоциация вместе с приёмом.
-  co_await(ReceiveDatagrams() || SweepLoop());
-}
-
-boost::asio::awaitable<void> UdpAssociate::ReceiveDatagrams() {
   std::vector<std::uint8_t> buffer(kBufferSize);
   boost::system::error_code ec;
+  // Уборка по часам, а не на каждой датаграмме: на активном QUIC обход всех
+  // сессий в горячем пути стоил заметно дороже самой пересылки.
+  auto next_sweep = std::chrono::steady_clock::now() + config_.sweep_interval;
+
   for (;;) {
     boost::asio::ip::udp::endpoint from;
     const std::size_t size = co_await relay_.async_receive_from(
@@ -190,20 +184,12 @@ boost::asio::awaitable<void> UdpAssociate::ReceiveDatagrams() {
     if (ec) {
       break;
     }
-    co_await HandleDatagram(from, buffer.data(), size);
-  }
-}
-
-boost::asio::awaitable<void> UdpAssociate::SweepLoop() {
-  boost::system::error_code ec;
-  while (!closed_) {
-    sweep_timer_.expires_after(config_.sweep_interval);
-    co_await sweep_timer_.async_wait(
-        boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-    if (ec) {
-      break;
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= next_sweep) {
+      SweepIdle();
+      next_sweep = now + config_.sweep_interval;
     }
-    SweepIdle();
+    co_await HandleDatagram(from, buffer.data(), size);
   }
 }
 
