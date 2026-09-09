@@ -27,6 +27,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -126,6 +127,28 @@ std::vector<std::string> ExpandConfigFile(int argc, char* argv[]) {
     throw std::runtime_error("Config file must contain a JSON object");
   }
 
+  // Аргументы-переключатели значения не принимают: в JSON они булевы, но в
+  // командной строке разворачиваются в голый флаг, иначе значение улетает в
+  // позиционные и разбор падает.
+  static constexpr std::string_view kFlagOnly[] = {"--disable-routing"};
+  const auto is_flag_only = [](const std::string& flag) {
+    return std::ranges::find(kFlagOnly, flag) != std::end(kFlagOnly);
+  };
+  const auto is_truthy = [](const nlohmann::json& value) {
+    if (value.is_boolean()) {
+      return value.get<bool>();
+    }
+    if (value.is_number()) {
+      return value.get<double>() != 0;
+    }
+    if (value.is_string()) {
+      const std::string text =
+          fptn::common::utils::ToLowerCase(value.get<std::string>());
+      return text == "true" || text == "1" || text == "yes" || text == "on";
+    }
+    return false;
+  };
+
   const auto to_flag = [](std::string key) {
     std::replace(key.begin(), key.end(), '_', '-');
     return "--" + key;
@@ -145,13 +168,20 @@ std::vector<std::string> ExpandConfigFile(int argc, char* argv[]) {
 
   for (const auto& [key, value] : doc.items()) {
     const std::string flag = to_flag(key);
+    if (value.is_null()) {
+      continue;
+    }
+    if (is_flag_only(flag)) {
+      if (is_truthy(value)) {
+        expanded.push_back(flag);
+      }
+      continue;
+    }
     if (value.is_array()) {
       // Массив - это повторяющийся флаг: так задаются несколько токенов.
       for (const auto& item : value) {
         append_value(flag, item);
       }
-    } else if (value.is_null()) {
-      continue;
     } else {
       append_value(flag, value);
     }
