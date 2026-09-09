@@ -239,6 +239,19 @@ boost::asio::awaitable<void> UdpAssociate::HandleDatagram(
 UdpAssociate::Session* UdpAssociate::FindOrCreate(const Key& key,
     const boost::asio::ip::udp::endpoint& client,
     boost::system::error_code& ec) {
+  const auto known = sessions_.find(key);
+  if (known == sessions_.end() && sessions_.size() >= config_.max_sessions) {
+    // Сначала убираем то, что уже простаивает: обычно этого хватает, и отказ
+    // достаётся только по-настоящему активному всплеску.
+    SweepIdle();
+    if (sessions_.size() >= config_.max_sessions) {
+      SPDLOG_WARN("UDP[{}]: session limit {} reached, dropping datagram",
+          session_id_, config_.max_sessions);
+      ec = boost::asio::error::no_descriptors;
+      return nullptr;
+    }
+  }
+
   if (const auto it = sessions_.find(key); it != sessions_.end()) {
     it->second->last_used = std::chrono::steady_clock::now();
     return it->second.get();

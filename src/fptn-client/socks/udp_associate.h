@@ -30,6 +30,9 @@ class UdpAssociate {
     std::string tun_address_ipv4;
     std::string tun_address_ipv6;
     std::chrono::seconds session_timeout{60};
+    // Сокет на каждую цель: без потолка одна ассоциация с активным QUIC
+    // способна съесть все дескрипторы процесса.
+    std::size_t max_sessions = 128;
   };
 
   UdpAssociate(boost::asio::any_io_executor executor,

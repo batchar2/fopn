@@ -7,6 +7,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -81,6 +82,12 @@ class Socks5Server {
     std::string tun_address_ipv6;
     std::string dns_server_ipv4;
     int connect_timeout_ms = 10000;
+    // Дескрипторов на сессию уходит два, и на роутере их немного: за потолком
+    // сервер отказывает клиенту, а не упирается в EMFILE.
+    std::size_t max_sessions = 512;
+    // Простаивающая сессия держит оба дескриптора до конца жизни процесса,
+    // если её не закрыть.
+    std::chrono::seconds idle_timeout{300};
   };
 
   explicit Socks5Server(Config config);
@@ -97,8 +104,14 @@ class Socks5Server {
   boost::asio::awaitable<void> AcceptLoop();
   boost::asio::awaitable<void> HandleSession(
       boost::asio::ip::tcp::socket client);
+  // Возвращает false, когда сессия оборвалась по простою: вызывающий тогда
+  // закрывает обе стороны, а не ждёт вторую половину релея.
   boost::asio::awaitable<void> Relay(boost::asio::ip::tcp::socket& from,
-      boost::asio::ip::tcp::socket& to);
+      boost::asio::ip::tcp::socket& to,
+      boost::asio::steady_timer& idle);
+  boost::asio::awaitable<void> WatchIdle(boost::asio::steady_timer& idle,
+      boost::asio::ip::tcp::socket& client,
+      boost::asio::ip::tcp::socket& remote);
   boost::asio::awaitable<void> HandleUdpAssociate(
       boost::asio::ip::tcp::socket& client, std::uint64_t session_id);
   boost::asio::awaitable<void> WaitForClose(
@@ -111,6 +124,7 @@ class Socks5Server {
   std::thread thread_;
   std::atomic<bool> running_{false};
   std::atomic<std::uint64_t> session_counter_{0};
+  std::atomic<std::size_t> active_sessions_{0};
 };
 
 using Socks5ServerPtr = std::unique_ptr<Socks5Server>;

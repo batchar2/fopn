@@ -7,7 +7,8 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <iostream>
 
 #if defined(__linux__) || defined(__APPLE__)
-#include <unistd.h>  // NOLINT(build/include_order)
+#include <sys/resource.h>  // NOLINT(build/include_order)
+#include <unistd.h>        // NOLINT(build/include_order)
 #endif
 
 #include <algorithm>
@@ -57,6 +58,33 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 namespace {
 
 using fptn::utils::speed_estimator::ServerInfo;
+
+#if defined(__linux__) || defined(__APPLE__)
+// Каждая проксируемая сессия держит два дескриптора, и мягкий лимит в 1024,
+// с которым запускают демоны на роутере, кончается за пару часов офисной
+// нагрузки: accept начинает возвращать EMFILE, и прокси перестаёт принимать
+// соединения, оставаясь при этом живым процессом.
+void RaiseFileDescriptorLimit() {
+  struct rlimit limit {};
+  if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
+    return;
+  }
+  const rlim_t previous = limit.rlim_cur;
+  if (limit.rlim_cur >= limit.rlim_max) {
+    SPDLOG_INFO("File descriptor limit: {} (already at maximum)", previous);
+    return;
+  }
+  limit.rlim_cur = limit.rlim_max;
+  if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
+    SPDLOG_WARN("Failed to raise the file descriptor limit from {}", previous);
+    return;
+  }
+  SPDLOG_INFO("File descriptor limit raised: {} -> {}", previous,
+      limit.rlim_cur);
+}
+#else
+void RaiseFileDescriptorLimit() {}
+#endif
 
 // Servers of every token in one pool, each carrying the credentials of the
 // token it came from.
@@ -215,7 +243,9 @@ class LatencyWatchdog final {
       }
       SPDLOG_WARN("{} is over the {} ms limit, restarting to switch server",
           DescribeServer(server_), max_ping_ms_);
-      std::raise(SIGTERM);
+      // Сигнал процессу, а не вызывающему потоку: raise() в многопоточной
+      // программе доставляет его сторожу, где обработчика нет.
+      kill(getpid(), SIGTERM);
       return;
     }
   }
@@ -247,6 +277,7 @@ int main(int argc, char* argv[]) {
   }
 #endif
   try {
+    RaiseFileDescriptorLimit();
     const std::set<std::string> bypass_methods = {"obfuscation",
         /* chrome */
         "sni-spoofing-chrome-149", "sni-spoofing-chrome-148",

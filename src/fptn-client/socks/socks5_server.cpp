@@ -58,6 +58,10 @@ constexpr std::uint8_t kRepAddressNotSupported = 0x08;
 
 constexpr std::size_t kRelayBufferSize = 32 * 1024;
 
+// Потолок паузы между попытками принять соединение, когда кончились
+// дескрипторы.
+constexpr std::chrono::milliseconds kAcceptBackoffMax{2000};
+
 std::uint8_t ErrorToReply(const boost::system::error_code& ec) {
   if (ec == boost::asio::error::connection_refused) {
     return kRepConnectionRefused;
@@ -75,8 +79,8 @@ std::uint8_t ErrorToReply(const boost::system::error_code& ec) {
   return kRepGeneralFailure;
 }
 
-// Reply to the client. We have nothing meaningful to report in BND.ADDR/BND.PORT,
-// so we send zeroes - every practical implementation does that and clients accept it.
+// Reply to the client. Nothing meaningful goes in BND.ADDR/BND.PORT, so it is
+// zeroes - every practical implementation does that and clients accept it.
 boost::asio::awaitable<void> SendReply(
     boost::asio::ip::tcp::socket& client, std::uint8_t reply) {
   const std::array<std::uint8_t, 10> response{
@@ -190,21 +194,61 @@ void Socks5Server::Stop() {
 }
 
 boost::asio::awaitable<void> Socks5Server::AcceptLoop() {
+  auto executor = co_await boost::asio::this_coro::executor;
+  boost::asio::steady_timer backoff(executor);
+  std::chrono::milliseconds pause{0};
+  bool reported = false;
+
   while (running_.load()) {
     boost::system::error_code ec;
     auto client = co_await acceptor_->async_accept(
         boost::asio::redirect_error(boost::asio::use_awaitable, ec));
     if (ec) {
-      if (running_.load()) {
-        SPDLOG_WARN("SOCKS5: accept failed: {}", ec.message());
+      if (!running_.load()) {
+        break;
       }
+      // Дескрипторы кончились: повторять сразу же означает крутиться на месте,
+      // забивая процессор и лог. Растущая пауза даёт закрыться тому, что уже
+      // отработало.
+      if (ec == boost::asio::error::no_descriptors ||
+          ec == boost::system::errc::too_many_files_open_in_system) {
+        pause = pause.count() == 0 ? std::chrono::milliseconds(100)
+                                   : std::min(pause * 2, kAcceptBackoffMax);
+        if (!reported) {
+          SPDLOG_ERROR(
+              "SOCKS5: out of file descriptors, throttling accepts "
+              "({} sessions active, limit {})",
+              active_sessions_.load(), config_.max_sessions);
+          reported = true;
+        }
+        backoff.expires_after(pause);
+        co_await backoff.async_wait(
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        continue;
+      }
+      SPDLOG_WARN("SOCKS5: accept failed: {}", ec.message());
       continue;
     }
+    pause = std::chrono::milliseconds(0);
+    reported = false;
+
+    // За потолком клиенту отвечают отказом - это лучше, чем принять соединение
+    // и оставить его висеть без дескрипторов на исходящее.
+    if (active_sessions_.load() >= config_.max_sessions) {
+      SPDLOG_WARN("SOCKS5: session limit {} reached, refusing",
+          config_.max_sessions);
+      boost::system::error_code ignored;
+      client.close(ignored);
+      continue;
+    }
+
     boost::asio::co_spawn(
         ioc_,
         [this, sock = std::move(client)]() mutable
         -> boost::asio::awaitable<void> {
+          ++active_sessions_;
           co_await HandleSession(std::move(sock));
+          --active_sessions_;
         },
         boost::asio::detached);
   }
@@ -322,7 +366,7 @@ boost::asio::awaitable<void> Socks5Server::HandleSession(
     co_return;
   }
 
-  // Resolve the name through the tunnel, otherwise the local dnsmasq hands us a FakeIP.
+  // Resolve through the tunnel: the local dnsmasq would hand back a FakeIP.
   if (!have_address) {
     const auto resolved = co_await resolver_->Resolve(target_host);
     if (resolved.empty()) {
@@ -344,7 +388,7 @@ boost::asio::awaitable<void> Socks5Server::HandleSession(
   }
   fptn::protocol::https::ApplyRoutingMark(remote.native_handle());
 
-  // Bind to the tunnel address: the policy rule then steers packets into the TUN.
+  // Bind to the tunnel address: the policy rule steers packets into the TUN.
   const std::string& bind_ip = target_address.is_v4()
                                    ? config_.tun_address_ipv4
                                    : config_.tun_address_ipv6;
@@ -397,14 +441,45 @@ boost::asio::awaitable<void> Socks5Server::HandleSession(
       target_port);
 
   // --- relay data in both directions ---
-  co_await (Relay(client, remote) && Relay(remote, client));
+  // Таймер простоя перезаводится на каждом прочитанном куске; когда он всё же
+  // срабатывает, обе стороны закрываются и релеи выходят по ошибке.
+  boost::asio::steady_timer idle(executor);
+  idle.expires_after(config_.idle_timeout);
+  co_await (Relay(client, remote, idle) && Relay(remote, client, idle) &&
+            WatchIdle(idle, client, remote));
 
   client.close(ec);
   remote.close(ec);
 }
 
+// Ждёт, пока таймер простоя не сработает по-настоящему: каждое чтение сдвигает
+// его вперёд, и тогда ожидание отменяется и начинается заново.
+boost::asio::awaitable<void> Socks5Server::WatchIdle(
+    boost::asio::steady_timer& idle,
+    boost::asio::ip::tcp::socket& client,
+    boost::asio::ip::tcp::socket& remote) {
+  for (;;) {
+    boost::system::error_code ec;
+    co_await idle.async_wait(
+        boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (!ec) {
+      SPDLOG_DEBUG("SOCKS5: closing idle session after {}s",
+          config_.idle_timeout.count());
+      boost::system::error_code ignored;
+      client.close(ignored);
+      remote.close(ignored);
+      co_return;
+    }
+    if (!client.is_open() || !remote.is_open()) {
+      co_return;
+    }
+  }
+}
+
 boost::asio::awaitable<void> Socks5Server::Relay(
-    boost::asio::ip::tcp::socket& from, boost::asio::ip::tcp::socket& to) {
+    boost::asio::ip::tcp::socket& from,
+    boost::asio::ip::tcp::socket& to,
+    boost::asio::steady_timer& idle) {
   std::vector<std::uint8_t> buffer(kRelayBufferSize);
   boost::system::error_code ec;
 
@@ -415,6 +490,7 @@ boost::asio::awaitable<void> Socks5Server::Relay(
     if (ec || bytes == 0) {
       break;
     }
+    idle.expires_after(config_.idle_timeout);
     co_await boost::asio::async_write(to,
         boost::asio::buffer(buffer.data(), bytes),
         boost::asio::redirect_error(boost::asio::use_awaitable, ec));
@@ -688,7 +764,8 @@ TunnelResolver::Query(const std::string& host, std::uint16_t qtype) {
     offset += rdlength;
   }
 
-  SPDLOG_DEBUG("TunnelResolver: '{}' -> {} address(es)", host, addresses.size());
+  SPDLOG_DEBUG(
+      "TunnelResolver: '{}' -> {} address(es)", host, addresses.size());
   co_return addresses;
 }
 
