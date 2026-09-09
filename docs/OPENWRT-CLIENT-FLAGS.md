@@ -146,11 +146,15 @@ backlog ядра, пока поднимается туннель. Это важ�
 
 | флаг | по умолчанию | что делает |
 |---|---|---|
-| `--enable-ad-block` | `true` | Блокировать рекламу и трекеры на уровне DNS |
 | `--blacklist-domains` | `solovev-live.ru,ria.ru,tass.ru,1tv.ru,ntv.ru,rt.com,lenta.ru` | Полностью закрыть домен и все его поддомены |
 | `--enable-split-tunnel` | `false` | Включить раздельное туннелирование |
 | `--split-tunnel-mode` | `exclude` | `exclude` — перечисленные домены мимо туннеля, остальное через него; `include` — наоборот |
 | `--split-tunnel-domains` | `ru,su,рф,xn--p1ai,vk.com,yandex.com,userapi.com,yandex.net,clstorage.net` | Список доменов для режима выше. Пустое значение — встроенный список |
+
+Блокировки рекламы на OpenWrt нет: `--enable-ad-block` собирается только в
+десктопных сборках (`#ifndef FPTN_OPENWRT`), и передавать его сюда нельзя —
+разбор упадёт с `Unknown argument`. Списки для роутера держит прозрачный прокси
+перед клиентом.
 
 ## Служебное
 

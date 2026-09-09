@@ -18,6 +18,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <utility>
 #include <vector>
 
+#include <boost/asio/as_tuple.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/experimental/awaitable_operators.hpp>
@@ -1022,12 +1023,18 @@ boost::asio::awaitable<TunnelResolver::Answer> TunnelResolver::QueryOverTcp(
 
   const boost::asio::ip::tcp::endpoint dns_endpoint(dns_addr, 53);
   boost::system::error_code op_ec;
+  // as_tuple, а не redirect_error: ровно тот же инстанс async_connect уже
+  // разворачивается в fptn-protocol-lib, и на x86 линковка падала на
+  // "defined in discarded section" - две копии одного кадра корутины.
   // Каждое ожидание даёт свой тип variant, поэтому переменные разные.
   const auto connect_outcome = co_await(
-      socket.async_connect(dns_endpoint,
-          boost::asio::redirect_error(boost::asio::use_awaitable, op_ec)) ||
+      socket.async_connect(
+          dns_endpoint, boost::asio::as_tuple(boost::asio::use_awaitable)) ||
       timer.async_wait(
           boost::asio::redirect_error(boost::asio::use_awaitable, ec)));
+  if (connect_outcome.index() == 0) {
+    op_ec = std::get<0>(std::get<0>(connect_outcome));
+  }
   if (connect_outcome.index() == 1 || op_ec) {
     SPDLOG_DEBUG("TunnelResolver: TCP connect to {} failed for '{}'",
         config_.dns_server_ipv4, host);
