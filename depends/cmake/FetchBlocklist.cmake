@@ -50,10 +50,10 @@ math(EXPR num_bytes "${hex_len} / 2")
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${hex}")
 
 file(WRITE "${OUTPUT}"
-"namespace fptn::adblock {
+"namespace fptn::plugin {
 extern const unsigned char ${SYMBOL}[] = {
 ${bytes}
 };
 extern const unsigned int ${SYMBOL}Len = ${num_bytes};
-}  // namespace fptn::adblock
+}  // namespace fptn::plugin
 ")

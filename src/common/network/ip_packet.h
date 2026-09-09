@@ -703,6 +703,60 @@ class IPPacket {
     return packet;
   }
 
+  std::unique_ptr<IPPacket> MakeTcpReset() const {
+    if (!IsIPv4() || !IsTCP()) {
+      return nullptr;
+    }
+    const std::uint8_t* p = data_.data();
+    const std::size_t ip_hdr = detail::Ipv4Ihl(p);
+    if (data_.size() < ip_hdr + 20) {
+      return nullptr;
+    }
+    const std::uint8_t* tcp = p + ip_hdr;
+    const std::size_t tcp_hdr = (tcp[12] >> 4) * 4;
+    if (data_.size() < ip_hdr + tcp_hdr) {
+      return nullptr;
+    }
+    const std::uint32_t seq = ReadU32Be(tcp + 4);
+    const std::uint32_t ack = ReadU32Be(tcp + 8);
+    const std::uint32_t payload_len =
+        static_cast<std::uint32_t>(data_.size() - ip_hdr - tcp_hdr);
+
+    constexpr std::size_t kTcpHdr = 20;
+    IPPacketData resp(detail::kMinIPv4 + kTcpHdr, 0);
+
+    resp[0] = 0x45;
+    detail::Ipv4Ttl(resp.data()) = 64;
+    resp[9] = 6;
+    WriteU16Be(resp.data() + 2, static_cast<std::uint16_t>(resp.size()));
+    Ipv4SetSrc(resp.data(), Ipv4GetDst(p));
+    Ipv4SetDst(resp.data(), Ipv4GetSrc(p));
+
+    std::uint8_t* rt = resp.data() + detail::kMinIPv4;
+    WriteU16Be(rt, ReadU16Be(tcp + 2));
+    WriteU16Be(rt + 2, ReadU16Be(tcp));
+    const std::uint32_t rst_seq = ack;
+    const std::uint32_t rst_ack = seq + payload_len;
+    rt[4] = static_cast<std::uint8_t>(rst_seq >> 24);
+    rt[5] = static_cast<std::uint8_t>(rst_seq >> 16);
+    rt[6] = static_cast<std::uint8_t>(rst_seq >> 8);
+    rt[7] = static_cast<std::uint8_t>(rst_seq);
+    rt[8] = static_cast<std::uint8_t>(rst_ack >> 24);
+    rt[9] = static_cast<std::uint8_t>(rst_ack >> 16);
+    rt[10] = static_cast<std::uint8_t>(rst_ack >> 8);
+    rt[11] = static_cast<std::uint8_t>(rst_ack);
+    rt[12] = static_cast<std::uint8_t>((kTcpHdr / 4) << 4);
+    rt[13] = 0x14;
+    WriteU16Be(rt + 14, 0);
+
+    auto packet = Parse(std::move(resp), client_id_);
+    if (!packet) {
+      return nullptr;
+    }
+    packet->ComputeCalculateFields();
+    return packet;
+  }
+
  protected:
   IPPacket() : client_id_(FPTN_PACKET_UNDEFINED_CLIENT_ID) {}  // for tests
 

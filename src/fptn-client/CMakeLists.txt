@@ -43,7 +43,7 @@ else()
     VERBATIM)
   set_source_files_properties(
     "${ADBLOCK_GENERATED}" PROPERTIES GENERATED TRUE SKIP_CLANG_TIDY ON)
-  set(ADBLOCK_SOURCES adblock/adblock.h adblock/adblock.cpp "${ADBLOCK_GENERATED}")
+  set(ADBLOCK_SOURCES plugins/adblock/adblock.h plugins/adblock/adblock.cpp "${ADBLOCK_GENERATED}")
 endif()
 
 set(SPLIT_TUNNEL_DOMAINS_LIST "${CMAKE_SOURCE_DIR}/deploy/domain_blacklist/russia.txt")

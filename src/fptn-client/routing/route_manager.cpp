@@ -1127,6 +1127,21 @@ bool RouteManager::AddDnsRoutesIPv4(
   return Enqueue({.ipv4 = ips, .ipv6 = {}, .policy = policy});
 }
 
+bool RouteManager::AddExcludeRouteWithReset(
+    const fptn::common::network::IPv4Address& ip,
+    fptn::common::network::IPPacketPtr reset) {
+  return Enqueue({.ipv4 = {ip},
+      .ipv6 = {},
+      .policy = RoutingPolicy::kExcludeFromVpn,
+      .reset_packet = std::move(reset)});
+}
+
+void RouteManager::SetTunSink(
+    std::function<void(fptn::common::network::IPPacketPtr)> sink) {
+  const std::unique_lock<std::mutex> lock(queue_mutex_);  // mutex
+  tun_sink_ = std::move(sink);
+}
+
 bool RouteManager::AddDnsRoutesIPv6(
     const std::vector<fptn::common::network::IPv6Address>& ips,
     const RoutingPolicy policy) {
@@ -1152,6 +1167,7 @@ bool RouteManager::Enqueue(PendingRoutes routes) {
 void RouteManager::RunRouteWorker() {
   while (worker_running_) {
     PendingRoutes routes;
+    std::function<void(fptn::common::network::IPPacketPtr)> sink;
     {
       std::unique_lock<std::mutex> lock(queue_mutex_);  // mutex
 
@@ -1162,6 +1178,9 @@ void RouteManager::RunRouteWorker() {
       }
       routes = std::move(route_queue_.front());
       route_queue_.pop();
+      if (routes.reset_packet) {
+        sink = tun_sink_;
+      }
     }
 
     if (!running_) {
@@ -1172,6 +1191,9 @@ void RouteManager::RunRouteWorker() {
     }
     if (!routes.ipv6.empty()) {
       ApplyDnsRoutesIPv6(routes.ipv6, routes.policy);
+    }
+    if (routes.reset_packet && sink) {
+      sink(std::move(routes.reset_packet));
     }
   }
 }
