@@ -522,10 +522,15 @@ boost::asio::awaitable<void> Socks5Server::HandleSession(
   // --- relay data in both directions ---
   // Таймер простоя перезаводится на каждом прочитанном куске; когда он всё же
   // срабатывает, обе стороны закрываются и релеи выходят по ошибке.
+  //
+  // Сторож стоит через ||, а не в общей цепочке &&: иначе он досыпает свой срок
+  // уже после того, как оба релея закончились, и всё это время держит фрейм
+  // сессии живым - а вместе с ним оба сокета. На потоке в сотни соединений в
+  // минуту дескрипторы копились тысячами и упирались в потолок сессий.
   boost::asio::steady_timer idle(executor);
   idle.expires_after(config_.idle_timeout);
-  co_await(Relay(client, remote, idle) && Relay(remote, client, idle) &&
-            WatchIdle(idle, client, remote));
+  co_await((Relay(client, remote, idle) && Relay(remote, client, idle)) ||
+           WatchIdle(idle, client, remote));
 
   client.close(ec);
   remote.close(ec);
