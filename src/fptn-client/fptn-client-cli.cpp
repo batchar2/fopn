@@ -20,6 +20,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <cstdint>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -412,6 +413,87 @@ class LatencyWatchdog final {
   std::thread thread_;
 };
 
+// Имена sni-spoofing-* остались от прежних версий: на деле они всегда включали
+// Reality-режим. Держим их псевдонимами канонических reality-*, чтобы не ломать
+// чужие конфиги.
+const std::map<std::string, std::string>& BypassAliases() {
+  static const std::map<std::string, std::string> kAliases = {
+      {"sni-spoofing-chrome-149", "reality-chrome-149"},
+      {"sni-spoofing-chrome-148", "reality-chrome-148"},
+      {"sni-spoofing-chrome-147", "reality-chrome-147"},
+      {"sni-spoofing-chrome-146", "reality-chrome-146"},
+      {"sni-spoofing-chrome-145", "reality-chrome-145"},
+      {"sni-spoofing-firefox-151", "reality-firefox-151"},
+      {"sni-spoofing-firefox-150", "reality-firefox-150"},
+      {"sni-spoofing-firefox-149", "reality-firefox-149"},
+      {"sni-spoofing-yandex-26-4", "reality-yandex-26-4"},
+      {"sni-spoofing-yandex-26-3", "reality-yandex-26-3"},
+      {"sni-spoofing-yandex-25", "reality-yandex-25"},
+      {"sni-spoofing-yandex-24", "reality-yandex-24"},
+      {"sni-spoofing-safari-26-5", "reality-safari-26-5"},
+      {"sni-spoofing-safari-26-4", "reality-safari-26-4"},
+  };
+  return kAliases;
+}
+
+const std::map<std::string, fptn::protocol::https::CensorshipStrategy>&
+BypassStrategies() {
+  using fptn::protocol::https::CensorshipStrategy;
+  static const std::map<std::string, CensorshipStrategy> kStrategies = {
+      {"sni", CensorshipStrategy::kSni},
+      {"obfuscation", CensorshipStrategy::kTlsObfuscator},
+      {"reality", CensorshipStrategy::kSniRealityMode},
+      /* Chrome */
+      {"reality-chrome-149", CensorshipStrategy::kSniRealityModeChrome149},
+      {"reality-chrome-148", CensorshipStrategy::kSniRealityModeChrome148},
+      {"reality-chrome-147", CensorshipStrategy::kSniRealityModeChrome147},
+      {"reality-chrome-146", CensorshipStrategy::kSniRealityModeChrome146},
+      {"reality-chrome-145", CensorshipStrategy::kSniRealityModeChrome145},
+      /* Firefox */
+      {"reality-firefox-151", CensorshipStrategy::kSniRealityModeFirefox151},
+      {"reality-firefox-150", CensorshipStrategy::kSniRealityModeFirefox150},
+      {"reality-firefox-149", CensorshipStrategy::kSniRealityModeFirefox149},
+      /* Yandex */
+      {"reality-yandex-26-4", CensorshipStrategy::kSniRealityModeYandex26_4},
+      {"reality-yandex-26-3", CensorshipStrategy::kSniRealityModeYandex26_3},
+      {"reality-yandex-25", CensorshipStrategy::kSniRealityModeYandex25},
+      {"reality-yandex-24", CensorshipStrategy::kSniRealityModeYandex24},
+      /* Safari */
+      {"reality-safari-26-5", CensorshipStrategy::kSniRealityModeSafari26_5},
+      {"reality-safari-26-4", CensorshipStrategy::kSniRealityModeSafari26_4},
+  };
+  return kStrategies;
+}
+
+// Всё, что принимает --bypass-method: канонические имена плюс псевдонимы.
+const std::set<std::string>& BypassMethodNames() {
+  static const std::set<std::string> kNames = [] {
+    std::set<std::string> names;
+    for (const auto& item : BypassStrategies()) {
+      names.insert(item.first);
+    }
+    for (const auto& item : BypassAliases()) {
+      names.insert(item.first);
+    }
+    return names;
+  }();
+  return kNames;
+}
+
+fptn::protocol::https::CensorshipStrategy ResolveBypassMethod(
+    const std::string& name) {
+  std::string method = name;
+  const auto alias = BypassAliases().find(method);
+  if (alias != BypassAliases().end()) {
+    method = alias->second;
+  }
+  const auto found = BypassStrategies().find(method);
+  if (found != BypassStrategies().end()) {
+    return found->second;
+  }
+  return fptn::protocol::https::CensorshipStrategy::kSniRealityModeYandex26_4;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -423,19 +505,6 @@ int main(int argc, char* argv[]) {
 #endif
   try {
     const std::size_t fd_limit = RaiseFileDescriptorLimit();
-    const std::set<std::string> bypass_methods = {"obfuscation",
-        /* chrome */
-        "sni-spoofing-chrome-149", "sni-spoofing-chrome-148",
-        "sni-spoofing-chrome-147", "sni-spoofing-chrome-146",
-        "sni-spoofing-chrome-145",
-        /* Firefox */
-        "sni-spoofing-firefox-151", "sni-spoofing-firefox-150",
-        "sni-spoofing-firefox-149",
-        /* Yandex */
-        "sni-spoofing-yandex-26-4", "sni-spoofing-yandex-26-3",
-        "sni-spoofing-yandex-25", "sni-spoofing-yandex-24",
-        /* Safari */
-        "sni-spoofing-safari-26-5", "sni-spoofing-safari-26-4"};
     const std::set<std::string> tunnel_modes = {"exclude", "include"};
 
     using fptn::protocol::https::obfuscator::GetObfuscatorByName;
@@ -563,43 +632,23 @@ int main(int argc, char* argv[]) {
         .default_value("sni-spoofing-yandex-26-4")
         .help(
             "Method to bypass censorship:\n"
-            "  obfuscation             - TLS obfuscation\n"
-            "  sni-spoofing-chrome-149  - SNI spoofing with Chrome 149 "
-            "handshake\n"
-            "  sni-spoofing-chrome-148  - SNI spoofing with Chrome 148 "
-            "handshake\n"
-            "  sni-spoofing-chrome-147  - SNI spoofing with Chrome 147 "
-            "handshake\n"
-            "  sni-spoofing-chrome-146  - SNI spoofing with Chrome 146 "
-            "handshake\n"
-            "  sni-spoofing-chrome-145  - SNI spoofing with Chrome 145 "
-            "handshake\n"
-            "  sni-spoofing-firefox-151 - SNI spoofing with Firefox 151 "
-            "handshake\n"
-            "  sni-spoofing-firefox-150 - SNI spoofing with Firefox 150 "
-            "handshake\n"
-            "  sni-spoofing-firefox-149 - SNI spoofing with Firefox 149 "
-            "handshake\n"
-            "  sni-spoofing-yandex-26-4 - SNI spoofing with Yandex 26.4 "
-            "handshake\n"
-            "  sni-spoofing-yandex-26-3 - SNI spoofing with Yandex 26.3 "
-            "handshake\n"
-            "  sni-spoofing-yandex-25   - SNI spoofing with Yandex 25 "
-            "handshake\n"
-            "  sni-spoofing-yandex-24   - SNI spoofing with Yandex 24 "
-            "handshake\n"
-            "  sni-spoofing-safari-26-5 - SNI spoofing with Safari 26.5 "
-            "handshake\n"
-            "  sni-spoofing-safari-26-4 - SNI spoofing with Safari 26.4 "
-            "handshake\n")
-        .action([&bypass_methods](const std::string& v) -> std::string {
+            "   sni                     - plain SNI spoofing\n"
+            "   obfuscation             - TLS obfuscation\n"
+            "   reality                 - Reality mode, generic profile\n"
+            "   reality-chrome-145..149 - Reality with a Chrome handshake\n"
+            "   reality-firefox-149..151 - Reality with a Firefox handshake\n"
+            "   reality-yandex-24, -25, -26-3, -26-4 - Yandex handshake\n"
+            "   reality-safari-26-4, -26-5 - Safari handshake\n"
+            "The sni-spoofing-* names are kept as aliases of the matching\n"
+            "reality-* method and mean the same thing.\n")
+        .action([](const std::string& v) -> std::string {
           if (v.empty() || v == "sni-spoofing") {
             return "sni-spoofing-yandex-26-4";
           }
-          if (!bypass_methods.contains(v)) {
+          if (!BypassMethodNames().contains(v)) {
             throw std::runtime_error(
                 fmt::format("Invalid bypass method '{}'. Choose from: {}", v,
-                    fmt::join(bypass_methods, ", ")));
+                    fmt::join(BypassMethodNames(), ", ")));
           }
           return v;
         });
@@ -848,47 +897,8 @@ int main(int argc, char* argv[]) {
 
     using fptn::protocol::https::CensorshipStrategy;
     const auto bypass_method = args.get<std::string>("--bypass-method");
-    CensorshipStrategy censorship_strategy =
-        CensorshipStrategy::kSniRealityModeYandex26_4;
-    if (bypass_method == "obfuscation") {
-      censorship_strategy = CensorshipStrategy::kTlsObfuscator;
-    }
-    /* Chrome */
-    else if (bypass_method == "sni-spoofing-chrome-149") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeChrome149;
-    } else if (bypass_method == "sni-spoofing-chrome-148") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeChrome148;
-    } else if (bypass_method == "sni-spoofing-chrome-147") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeChrome147;
-    } else if (bypass_method == "sni-spoofing-chrome-146") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeChrome146;
-    } else if (bypass_method == "sni-spoofing-chrome-145") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeChrome145;
-    }
-    /* Firefox */
-    else if (bypass_method == "sni-spoofing-firefox-151") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeFirefox151;
-    } else if (bypass_method == "sni-spoofing-firefox-150") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeFirefox150;
-    } else if (bypass_method == "sni-spoofing-firefox-149") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeFirefox149;
-    }
-    /* Yandex */
-    else if (bypass_method == "sni-spoofing-yandex-26-4") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeYandex26_4;
-    } else if (bypass_method == "sni-spoofing-yandex-26-3") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeYandex26_3;
-    } else if (bypass_method == "sni-spoofing-yandex-25") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeYandex25;
-    } else if (bypass_method == "sni-spoofing-yandex-24") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeYandex24;
-    }
-    /* Safari */
-    else if (bypass_method == "sni-spoofing-safari-26-5") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeSafari26_5;
-    } else if (bypass_method == "sni-spoofing-safari-26-4") {
-      censorship_strategy = CensorshipStrategy::kSniRealityModeSafari26_4;
-    }
+    const CensorshipStrategy censorship_strategy =
+        ResolveBypassMethod(bypass_method);
 
     using fptn::protocol::connection::strategies::ConnectionStrategy;
     const auto connection_strategy_name =
