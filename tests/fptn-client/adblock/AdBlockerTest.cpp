@@ -15,19 +15,19 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include "common/network/ip_packet.h"
 
-#include "adblock/adblock.h"
+#include "plugins/adblock/adblock.h"
 
-namespace fptn::adblock {
+namespace fptn::plugin {
 extern const unsigned char kBlocklistGz[] = {0};
 extern const unsigned int kBlocklistGzLen = 0;
-}  // namespace fptn::adblock
+}  // namespace fptn::plugin
 
 namespace {
 
-using fptn::adblock::AdBlocker;
 using fptn::common::network::IPPacket;
 using fptn::common::network::IPPacketData;
 using fptn::common::network::ReadU16Be;
+using fptn::plugin::AdBlock;
 
 constexpr std::uint8_t kUdp = 17;
 constexpr std::uint16_t kTypeA = 1;
@@ -119,8 +119,8 @@ IPPacketData MakeDnsQuery(
   return p;
 }
 
-AdBlocker MakeBlocker() {
-  return AdBlocker(
+AdBlock MakeBlocker() {
+  return AdBlock(
       std::unordered_set<std::string>{"doubleclick.net", "ads.example.com"});
 }
 
@@ -174,7 +174,7 @@ std::size_t QuestionEnd(const std::string& domain, bool ipv6 = false) {
 }  // namespace
 
 TEST(AdBlockerTest, BlocksExactDomainWithLoopbackA) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   auto query = IPPacket::Parse(MakeDnsQuery("doubleclick.net", kTypeA));
   ASSERT_NE(query, nullptr);
 
@@ -188,7 +188,7 @@ TEST(AdBlockerTest, BlocksExactDomainWithLoopbackA) {
 }
 
 TEST(AdBlockerTest, BlocksSubdomainOfBlockedParent) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   auto query = IPPacket::Parse(MakeDnsQuery("a.b.ads.example.com", kTypeA));
   ASSERT_NE(query, nullptr);
 
@@ -200,14 +200,14 @@ TEST(AdBlockerTest, BlocksSubdomainOfBlockedParent) {
 }
 
 TEST(AdBlockerTest, PassesThroughAllowedDomain) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   auto query = IPPacket::Parse(MakeDnsQuery("example.org", kTypeA));
   ASSERT_NE(query, nullptr);
   EXPECT_EQ(blocker.ProcessOutgoingDns(*query), nullptr);
 }
 
 TEST(AdBlockerTest, BlocksAaaaWithLoopbackV6) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   auto query = IPPacket::Parse(MakeDnsQuery("doubleclick.net", kTypeAAAA));
   ASSERT_NE(query, nullptr);
 
@@ -219,7 +219,7 @@ TEST(AdBlockerTest, BlocksAaaaWithLoopbackV6) {
 }
 
 TEST(AdBlockerTest, BlocksNonAddressQueryWithNxdomain) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   auto query = IPPacket::Parse(MakeDnsQuery("doubleclick.net", kTypeMx));
   ASSERT_NE(query, nullptr);
 
@@ -229,7 +229,7 @@ TEST(AdBlockerTest, BlocksNonAddressQueryWithNxdomain) {
 }
 
 TEST(AdBlockerTest, BlocksIpv6Query) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   auto query = IPPacket::Parse(MakeDnsQuery("doubleclick.net", kTypeA, true));
   ASSERT_NE(query, nullptr);
 
@@ -242,7 +242,7 @@ TEST(AdBlockerTest, BlocksIpv6Query) {
 }
 
 TEST(AdBlockerTest, BuildsValidIPv4ResponseHeaders) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   const IPPacketData query_data = MakeDnsQuery("doubleclick.net", kTypeA);
   auto query = IPPacket::Parse(query_data);
   ASSERT_NE(query, nullptr);
@@ -268,7 +268,7 @@ TEST(AdBlockerTest, BuildsValidIPv4ResponseHeaders) {
 }
 
 TEST(AdBlockerTest, BuildsWellFormedDnsAnswer) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   const IPPacketData query_data = MakeDnsQuery("doubleclick.net", kTypeA);
   auto query = IPPacket::Parse(query_data);
   ASSERT_NE(query, nullptr);
@@ -307,7 +307,7 @@ TEST(AdBlockerTest, BuildsWellFormedDnsAnswer) {
 }
 
 TEST(AdBlockerTest, BuildsValidIPv6ResponseHeaders) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   auto query = IPPacket::Parse(MakeDnsQuery("doubleclick.net", kTypeA, true));
   ASSERT_NE(query, nullptr);
 
@@ -328,7 +328,7 @@ TEST(AdBlockerTest, BuildsValidIPv6ResponseHeaders) {
 }
 
 TEST(AdBlockerTest, NxdomainResponseKeepsQuestionIntact) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   const IPPacketData query_data = MakeDnsQuery("doubleclick.net", kTypeMx);
   auto query = IPPacket::Parse(query_data);
   ASSERT_NE(query, nullptr);
@@ -350,7 +350,7 @@ TEST(AdBlockerTest, NxdomainResponseKeepsQuestionIntact) {
 }
 
 TEST(AdBlockerTest, IgnoresNonDnsPacket) {
-  const AdBlocker blocker = MakeBlocker();
+  const AdBlock blocker = MakeBlocker();
   IPPacketData packet = MakeDnsQuery("doubleclick.net", kTypeA);
   packet[22] = 0x01;
   packet[23] = 0x00;
@@ -360,8 +360,121 @@ TEST(AdBlockerTest, IgnoresNonDnsPacket) {
 }
 
 TEST(AdBlockerTest, EmptyBlocklistBlocksNothing) {
-  const AdBlocker blocker{std::unordered_set<std::string>{}};
+  const AdBlock blocker{std::unordered_set<std::string>{}};
   auto query = IPPacket::Parse(MakeDnsQuery("doubleclick.net", kTypeA));
   ASSERT_NE(query, nullptr);
   EXPECT_EQ(blocker.ProcessOutgoingDns(*query), nullptr);
+}
+
+namespace {
+
+using fptn::common::network::IPPacketPtr;
+using fptn::plugin::Direction;
+
+constexpr std::uint8_t kTcpProto = 6;
+
+void PushU16(std::vector<std::uint8_t>& out, std::size_t value) {
+  out.push_back(static_cast<std::uint8_t>(value >> 8));
+  out.push_back(static_cast<std::uint8_t>(value & 0xFF));
+}
+
+std::vector<std::uint8_t> MakeClientHello(const std::string& sni) {
+  std::vector<std::uint8_t> body = {0x01, 0x00, 0x00, 0x00, 0x03, 0x03};
+  body.insert(body.end(), 32, 0x11);
+  body.push_back(0x00);
+  PushU16(body, 2);
+  body.push_back(0x13);
+  body.push_back(0x01);
+  body.push_back(0x01);
+  body.push_back(0x00);
+
+  std::vector<std::uint8_t> extensions;
+  PushU16(extensions, 0x0000);
+  PushU16(extensions, sni.size() + 5);
+  PushU16(extensions, sni.size() + 3);
+  extensions.push_back(0x00);
+  PushU16(extensions, sni.size());
+  extensions.insert(extensions.end(), sni.begin(), sni.end());
+  PushU16(body, extensions.size());
+  body.insert(body.end(), extensions.begin(), extensions.end());
+
+  const std::size_t handshake_len = body.size() - 4;
+  body[1] = static_cast<std::uint8_t>(handshake_len >> 16);
+  body[2] = static_cast<std::uint8_t>(handshake_len >> 8);
+  body[3] = static_cast<std::uint8_t>(handshake_len & 0xFF);
+
+  std::vector<std::uint8_t> record = {0x16, 0x03, 0x01};
+  PushU16(record, body.size());
+  record.insert(record.end(), body.begin(), body.end());
+  return record;
+}
+
+IPPacketPtr MakeHandshake(const std::string& sni) {
+  constexpr std::size_t kIpHdr = 20;
+  constexpr std::size_t kTcpHdr = 20;
+  const std::vector<std::uint8_t> hello = MakeClientHello(sni);
+  IPPacketData p(kIpHdr + kTcpHdr + hello.size(), 0);
+  p[0] = 0x45;
+  p[2] = static_cast<std::uint8_t>(p.size() >> 8);
+  p[3] = static_cast<std::uint8_t>(p.size() & 0xFF);
+  p[9] = kTcpProto;
+  p[12] = 10;
+  p[15] = 1;
+  p[16] = 1;
+  p[17] = 2;
+  p[18] = 3;
+  p[19] = 4;
+  p[kIpHdr] = 0xC0;
+  p[kIpHdr + 2] = 0x01;
+  p[kIpHdr + 3] = 0xBB;
+  p[kIpHdr + 12] = 0x50;
+  for (std::size_t i = 0; i < hello.size(); ++i) {
+    p[kIpHdr + kTcpHdr + i] = hello[i];
+  }
+  return IPPacket::Parse(std::move(p));
+}
+
+}  // namespace
+
+TEST(AdBlockerTest, DropsBlockedSniWithoutReply) {
+  AdBlock blocker = MakeBlocker();
+
+  auto result = blocker.HandlePacket(
+      MakeHandshake("cdn.ads.example.com"), Direction::kOutgoing);
+  EXPECT_EQ(result.packet, nullptr) << "blocked TLS packet is dropped";
+  EXPECT_EQ(result.reply, nullptr) << "no RST is sent, just a silent drop";
+  EXPECT_TRUE(result.triggered);
+}
+
+TEST(AdBlockerTest, PassesAllowedSni) {
+  AdBlock blocker = MakeBlocker();
+
+  auto result =
+      blocker.HandlePacket(MakeHandshake("example.org"), Direction::kOutgoing);
+  ASSERT_NE(result.packet, nullptr);
+  EXPECT_EQ(result.reply, nullptr);
+  EXPECT_FALSE(result.triggered);
+}
+
+TEST(AdBlockerTest, DropsBlockedDnsQueryReturningResponse) {
+  AdBlock blocker = MakeBlocker();
+
+  auto result = blocker.HandlePacket(
+      IPPacket::Parse(MakeDnsQuery("doubleclick.net", kTypeA)),
+      Direction::kOutgoing);
+  EXPECT_EQ(result.packet, nullptr) << "the query is not forwarded";
+  ASSERT_NE(result.reply, nullptr) << "a null-route DNS answer is returned";
+  EXPECT_TRUE(result.triggered);
+  const auto addrs = result.reply->GetDnsIPv4Addresses();
+  ASSERT_EQ(addrs.size(), 1U);
+  EXPECT_EQ(addrs[0].ToString(), "127.0.0.1");
+}
+
+TEST(AdBlockerTest, IgnoresIncomingDirection) {
+  AdBlock blocker = MakeBlocker();
+
+  auto result = blocker.HandlePacket(
+      MakeHandshake("cdn.ads.example.com"), Direction::kIncoming);
+  ASSERT_NE(result.packet, nullptr) << "adblock only acts on outgoing traffic";
+  EXPECT_FALSE(result.triggered);
 }

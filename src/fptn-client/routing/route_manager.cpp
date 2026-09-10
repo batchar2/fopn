@@ -95,21 +95,26 @@ std::pair<std::string, std::string> GetWindowsDefaultRoute(
     bool ipv6, const std::string& exclude_interface) {
   const std::string family = ipv6 ? "IPv6" : "IPv4";
   const std::string prefix = ipv6 ? "::/0" : "0.0.0.0/0";
-  const std::string command =
-      R"(powershell -NoProfile -NonInteractive -Command ")"
-      R"($ErrorActionPreference='SilentlyContinue'; )"
-      R"(try { [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false) } )"
-      R"(catch {}; $r = Get-NetRoute -AddressFamily )" +
-      family + " -DestinationPrefix '" + prefix + "'"
-      " | Where-Object {$_.InterfaceAlias -ne '" +
-      EscapeForPowerShell(exclude_interface) +
-      "' -and $_.NextHop -ne '0.0.0.0' -and $_.NextHop -ne '::'}"
-      " | Sort-Object {$_.RouteMetric + (Get-NetIPInterface -InterfaceIndex "
-      "$_.ifIndex -AddressFamily " +
-      family +
-      ").InterfaceMetric}"
-      " | Select-Object -First 1;" +
-      R"( if ($r) { '{0}|{1}|{2}' -f $r.NextHop,$r.ifIndex,$r.InterfaceAlias }")";
+  const std::string probe = ipv6 ? "2001:4860:4860::8888" : "8.8.8.8";
+  const std::string exclude = EscapeForPowerShell(exclude_interface);
+  const std::string command = fmt::format(
+      R"PSHELL(powershell -NoProfile -NonInteractive -Command "
+    $ErrorActionPreference = 'SilentlyContinue';
+    try {{ [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) }} catch {{}};
+    $ex = '{exclude}';
+    $r = Find-NetRoute -RemoteIPAddress '{probe}' |
+      Where-Object {{ $_.NextHop -and $_.NextHop -ne '0.0.0.0' -and $_.NextHop -ne '::' -and $_.InterfaceAlias -ne $ex }} |
+      Select-Object -First 1;
+    if (-not $r) {{
+      $r = Get-NetRoute -AddressFamily {family} -DestinationPrefix '{prefix}' |
+        Where-Object {{ $_.InterfaceAlias -ne $ex -and $_.NextHop -ne '0.0.0.0' -and $_.NextHop -ne '::' }} |
+        Sort-Object RouteMetric |
+        Select-Object -First 1;
+    }}
+    if ($r) {{ $r.NextHop + '|' + $r.ifIndex + '|' + $r.InterfaceAlias }}
+  ")PSHELL",
+      fmt::arg("exclude", exclude), fmt::arg("probe", probe),
+      fmt::arg("family", family), fmt::arg("prefix", prefix));
 
   std::vector<std::string> output;
   fptn::common::system::command::run(command, output);
@@ -718,9 +723,14 @@ pass out on {tunInterfaceName} proto tcp from any to any port 53
 
   const std::string win_tun_dns4 =
       has_custom_dns ? custom_dns : config_.dns_server_ipv4.ToString();
+  const std::string out_interface_number =
+      GetWindowsInterfaceNumber(detected_out_interface_name_);
+  const std::string out_interface_info =
+      out_interface_number.empty() ? "" : " if " + out_interface_number;
   std::vector<std::string> commands = {
-      fmt::format("route add {} mask 255.255.255.255 {} METRIC 2",
-          config_.vpn_server_ip.ToString(), detected_gateway_ipv4_.ToString()),
+      fmt::format("route add {} mask 255.255.255.255 {} METRIC 2{}",
+          config_.vpn_server_ip.ToString(), detected_gateway_ipv4_.ToString(),
+          out_interface_info),
       // Default gateway & dns
       fmt::format("route add 0.0.0.0 mask 0.0.0.0 {} METRIC 1 {}",
           config_.tun_interface_address_ipv4.ToString(), interface_info),
@@ -1127,6 +1137,21 @@ bool RouteManager::AddDnsRoutesIPv4(
   return Enqueue({.ipv4 = ips, .ipv6 = {}, .policy = policy});
 }
 
+bool RouteManager::AddExcludeRouteWithReset(
+    const fptn::common::network::IPv4Address& ip,
+    fptn::common::network::IPPacketPtr reset) {
+  return Enqueue({.ipv4 = {ip},
+      .ipv6 = {},
+      .policy = RoutingPolicy::kExcludeFromVpn,
+      .reset_packet = std::move(reset)});
+}
+
+void RouteManager::SetTunSink(
+    std::function<void(fptn::common::network::IPPacketPtr)> sink) {
+  const std::unique_lock<std::mutex> lock(queue_mutex_);  // mutex
+  tun_sink_ = std::move(sink);
+}
+
 bool RouteManager::AddDnsRoutesIPv6(
     const std::vector<fptn::common::network::IPv6Address>& ips,
     const RoutingPolicy policy) {
@@ -1152,6 +1177,7 @@ bool RouteManager::Enqueue(PendingRoutes routes) {
 void RouteManager::RunRouteWorker() {
   while (worker_running_) {
     PendingRoutes routes;
+    std::function<void(fptn::common::network::IPPacketPtr)> sink;
     {
       std::unique_lock<std::mutex> lock(queue_mutex_);  // mutex
 
@@ -1162,6 +1188,9 @@ void RouteManager::RunRouteWorker() {
       }
       routes = std::move(route_queue_.front());
       route_queue_.pop();
+      if (routes.reset_packet) {
+        sink = tun_sink_;
+      }
     }
 
     if (!running_) {
@@ -1172,6 +1201,9 @@ void RouteManager::RunRouteWorker() {
     }
     if (!routes.ipv6.empty()) {
       ApplyDnsRoutesIPv6(routes.ipv6, routes.policy);
+    }
+    if (routes.reset_packet && sink) {
+      sink(std::move(routes.reset_packet));
     }
   }
 }

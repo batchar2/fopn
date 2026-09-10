@@ -12,6 +12,8 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include <spdlog/spdlog.h>  // NOLINT(build/include_order)
 
+#include "common/network/ip_utils.h"
+
 #include "utils/utils.h"
 
 namespace fptn::plugin {
@@ -31,10 +33,10 @@ Tunneling::Tunneling(const std::vector<std::string>& rules,
   SPDLOG_INFO("Tunneling rules loaded: {} domains", domains_.size());
 }
 
-std::pair<fptn::common::network::IPPacketPtr, bool> Tunneling::HandlePacket(
-    fptn::common::network::IPPacketPtr packet) {
+Result Tunneling::HandlePacket(
+    fptn::common::network::IPPacketPtr packet, Direction direction) {
   bool triggered = false;
-  if (packet->IsDns()) {
+  if (direction == Direction::kIncoming && packet->IsDns()) {
     const auto domain_opt = packet->GetDnsDomain();
     if (domain_opt.has_value()) {
       const std::string& domain = domain_opt.value();
@@ -66,8 +68,34 @@ std::pair<fptn::common::network::IPPacketPtr, bool> Tunneling::HandlePacket(
         }
       }
     }
+  } else if (direction == Direction::kOutgoing && packet->IsTCP() &&
+             packet->IsIPv4()) {
+    const auto [payload, size] = packet->GetTcpPayload();
+    if (fptn::common::network::IsTlsClientHello(payload, size)) {
+      const auto sni_opt = fptn::common::network::GetTlsSNI(payload, size);
+      if (sni_opt.has_value()) {
+        const std::string& sni = sni_opt.value();
+        const bool domain_matched = fptn::utils::IsDomainMatched(domains_, sni);
+
+        const bool needs_routes =
+            (policy_ == routing::RoutingPolicy::kIncludeInVpn &&
+                !domain_matched) ||
+            (policy_ == routing::RoutingPolicy::kExcludeFromVpn &&
+                domain_matched);
+        if (needs_routes) {
+          SPDLOG_INFO("SNI '{}' -> EXCLUDE from VPN", sni);
+          route_manager_->AddExcludeRouteWithReset(
+              packet->GetDstIPv4Address(), packet->MakeTcpReset());
+          return {.packet = nullptr, .reply = nullptr, .triggered = true};
+        }
+      }
+    }
   }
-  return {std::move(packet), triggered};
+  return {
+      .packet = std::move(packet),
+      .reply = nullptr,
+      .triggered = triggered,
+  };
 }
 
 }  // namespace fptn::plugin

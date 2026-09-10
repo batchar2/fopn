@@ -88,3 +88,13 @@ TEST(SplitTunnelingTest, EmptyRulesMatchNothing) {
   EXPECT_FALSE(IsDomainMatched(rules, "vk.com"));
   EXPECT_FALSE(IsDomainMatched(rules, "mail.ru"));
 }
+
+TEST(SplitTunnelingTest, SplitsSubdomainViaParentRule) {
+  const auto rules = MakeRules({"vk.com"});
+
+  EXPECT_TRUE(IsDomainMatched(rules, "vk.com"));
+  EXPECT_TRUE(IsDomainMatched(rules, "m.vk.com"));
+  EXPECT_TRUE(IsDomainMatched(rules, "api.m.vk.com"));
+  EXPECT_FALSE(IsDomainMatched(rules, "notvk.com"));
+  EXPECT_FALSE(IsDomainMatched(rules, "vk.com.evil.net"));
+}
