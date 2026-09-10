@@ -26,8 +26,8 @@ class Tunneling final : public BasePlugin {
 
   ~Tunneling() override = default;
 
-  std::pair<fptn::common::network::IPPacketPtr, bool> HandlePacket(
-      fptn::common::network::IPPacketPtr packet) override;
+  Result HandlePacket(
+      fptn::common::network::IPPacketPtr packet, Direction direction) override;
 
  private:
   const routing::RouteManagerSPtr route_manager_;

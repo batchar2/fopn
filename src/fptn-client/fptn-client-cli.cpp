@@ -48,7 +48,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include "fptn-protocol-lib/https/obfuscator/methods/detector.h"
 #include "fptn-protocol-lib/time/time_provider.h"
 #ifndef FPTN_OPENWRT
-#include "adblock/adblock.h"
+#include "plugins/adblock/adblock.h"
 #endif
 #include "plugins/blacklist/domain_blacklist.h"
 #include "routing/route_manager.h"
@@ -1250,6 +1250,11 @@ int main(int argc, char* argv[]) {
 
     /* plugins */
     std::vector<fptn::plugin::BasePluginPtr> client_plugins;
+#ifndef FPTN_OPENWRT
+    if (enable_ad_block) {
+      client_plugins.push_back(std::make_unique<fptn::plugin::AdBlock>());
+    }
+#endif
     // Plugins drive routes via route_manager - useless without it.
     if (route_manager && !blacklist_domains.empty()) {
       auto blacklist_plugin = std::make_unique<fptn::plugin::DomainBlacklist>(
@@ -1266,23 +1271,12 @@ int main(int argc, char* argv[]) {
       client_plugins.push_back(std::move(split_tunnel_plugin));
     }
 
-#ifndef FPTN_OPENWRT
-    fptn::adblock::AdBlockerPtr ad_blocker;
-    if (enable_ad_block) {
-      ad_blocker = std::make_shared<fptn::adblock::AdBlocker>();
-    }
-#endif
-
     /* vpn client */
     fptn::vpn::VpnManager vpn_client(
         fptn::vpn::VpnManager::Config{.http_client = std::move(http_client),
             .route_manager = route_manager,
             .virtual_net_interface = virtual_network_interface,
-            .plugins = std::move(client_plugins),
-#ifndef FPTN_OPENWRT
-            .ad_blocker = std::move(ad_blocker)
-#endif
-        });
+            .plugins = std::move(client_plugins)});
 
     vpn_client.Start();
 

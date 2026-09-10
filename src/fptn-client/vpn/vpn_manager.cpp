@@ -116,6 +116,11 @@ bool VpnManager::Start() {
   }
 
   if (config_.route_manager) {
+    config_.route_manager->SetTunSink(
+        [iface = config_.virtual_net_interface](
+            fptn::common::network::IPPacketPtr packet) {
+          iface->Send(std::move(packet));
+        });
     config_.route_manager->Apply(config_.virtual_net_interface->Name());
   }
 
@@ -303,16 +308,22 @@ void VpnManager::HandleOnPacketsFromVirtualNetworkInterface(
       if (!packet) {
         continue;
       }
-#ifndef FPTN_OPENWRT
-      if (config_.ad_blocker && packet->IsDns()) {
-        if (auto response = config_.ad_blocker->ProcessOutgoingDns(*packet)) {
-          if (config_.virtual_net_interface) {
-            config_.virtual_net_interface->Send(std::move(response));
+      for (const auto& plugin : config_.plugins) {
+        if (packet) {
+          auto result = plugin->HandlePacket(
+              std::move(packet), fptn::plugin::Direction::kOutgoing);
+          packet = std::move(result.packet);
+          if (result.reply && config_.virtual_net_interface) {
+            config_.virtual_net_interface->Send(std::move(result.reply));
           }
-          continue;
+          if (result.triggered) {
+            break;
+          }
         }
       }
-#endif
+      if (!packet) {
+        continue;
+      }
       if (config_.http_client->Send(std::move(packet))) {
         ++to_server_sent_;
       } else {
@@ -371,10 +382,11 @@ void VpnManager::ProcessWebSocketPackets() {
     for (auto& packet : batch) {
       for (const auto& plugin : config_.plugins) {
         if (packet) {
-          auto [processed_packet, triggered] =
-              plugin->HandlePacket(std::move(packet));
-          packet = std::move(processed_packet);
-          if (triggered) {
+          auto result =
+              plugin->HandlePacket(
+                  std::move(packet), fptn::plugin::Direction::kIncoming);
+          packet = std::move(result.packet);
+          if (result.triggered) {
             break;
           }
         }

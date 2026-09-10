@@ -312,3 +312,84 @@ TEST(IPPacketTest, PaddingAppliedOnlyToSmallBatches) {
     EXPECT_LT(plain, kAckSize + kMinPaddingBytes);
   }
 }
+
+namespace {
+
+std::uint32_t ReadBe32(const std::uint8_t* p) {
+  return (static_cast<std::uint32_t>(p[0]) << 24) |
+         (static_cast<std::uint32_t>(p[1]) << 16) |
+         (static_cast<std::uint32_t>(p[2]) << 8) |
+         static_cast<std::uint32_t>(p[3]);
+}
+
+IPPacketData MakeTcpDataSegment(std::uint32_t seq, std::uint32_t ack,
+    std::uint16_t src_port, std::uint16_t dst_port, std::size_t payload) {
+  IPPacketData p(40 + payload, 0);
+  p[0] = 0x45;
+  p[8] = 64;
+  p[9] = kTcp;
+  p[2] = static_cast<std::uint8_t>((p.size() >> 8) & 0xFF);
+  p[3] = static_cast<std::uint8_t>(p.size() & 0xFF);
+  p[12] = 10;
+  p[13] = 0;
+  p[14] = 0;
+  p[15] = 1;
+  p[16] = 93;
+  p[17] = 184;
+  p[18] = 216;
+  p[19] = 34;
+  std::size_t t = 20;
+  p[t] = static_cast<std::uint8_t>(src_port >> 8);
+  p[t + 1] = static_cast<std::uint8_t>(src_port & 0xFF);
+  p[t + 2] = static_cast<std::uint8_t>(dst_port >> 8);
+  p[t + 3] = static_cast<std::uint8_t>(dst_port & 0xFF);
+  p[t + 4] = static_cast<std::uint8_t>(seq >> 24);
+  p[t + 5] = static_cast<std::uint8_t>(seq >> 16);
+  p[t + 6] = static_cast<std::uint8_t>(seq >> 8);
+  p[t + 7] = static_cast<std::uint8_t>(seq);
+  p[t + 8] = static_cast<std::uint8_t>(ack >> 24);
+  p[t + 9] = static_cast<std::uint8_t>(ack >> 16);
+  p[t + 10] = static_cast<std::uint8_t>(ack >> 8);
+  p[t + 11] = static_cast<std::uint8_t>(ack);
+  p[t + 12] = static_cast<std::uint8_t>(5 << 4);
+  p[t + 13] = 0x18;
+  return p;
+}
+
+}  // namespace
+
+TEST(IPPacketTest, MakeTcpResetSwapsEndpointsAndSetsFields) {
+  const std::uint32_t seq = 0x11223344;
+  const std::uint32_t ack = 0xAABBCCDD;
+  const std::size_t payload = 100;
+  const auto hello =
+      IPPacket::Parse(MakeTcpDataSegment(seq, ack, 0xC001, 0x01BB, payload));
+  ASSERT_NE(hello, nullptr);
+
+  const auto rst = hello->MakeTcpReset();
+  ASSERT_NE(rst, nullptr);
+  EXPECT_TRUE(rst->IsIPv4());
+  EXPECT_TRUE(rst->IsTCP());
+  EXPECT_EQ(rst->GetSrcIPv4Address().ToString(), "93.184.216.34");
+  EXPECT_EQ(rst->GetDstIPv4Address().ToString(), "10.0.0.1");
+  EXPECT_EQ(rst->GetTcpSrcPort(), 0x01BB);
+  EXPECT_EQ(rst->GetTcpDstPort(), 0xC001);
+
+  const auto& d = rst->Data();
+  ASSERT_EQ(d.size(), 40U);
+  EXPECT_EQ(d[20 + 13], 0x14);
+  EXPECT_EQ(ReadBe32(d.data() + 20 + 4), ack);
+  EXPECT_EQ(ReadBe32(d.data() + 20 + 8), seq + payload);
+}
+
+TEST(IPPacketTest, MakeTcpResetReturnsNullForUdp) {
+  const auto packet = IPPacket::Parse(MakeIPv4(kUdp, 0x1111, 0x2222));
+  ASSERT_NE(packet, nullptr);
+  EXPECT_EQ(packet->MakeTcpReset(), nullptr);
+}
+
+TEST(IPPacketTest, MakeTcpResetReturnsNullForIPv6) {
+  const auto packet = IPPacket::Parse(MakeIPv6(kTcp, 0xABCD, 0xEF01));
+  ASSERT_NE(packet, nullptr);
+  EXPECT_EQ(packet->MakeTcpReset(), nullptr);
+}

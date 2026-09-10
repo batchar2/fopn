@@ -8,6 +8,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,6 +19,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <queue>
 
 #include "common/network/ip_address.h"
+#include "common/network/ip_packet.h"
 
 namespace fptn::routing {
 std::string GetDefaultNetworkInterfaceName(
@@ -98,6 +100,12 @@ class RouteManager final {
       const std::vector<fptn::common::network::IPv6Address>& ips,
       RoutingPolicy policy);
 
+  bool AddExcludeRouteWithReset(const fptn::common::network::IPv4Address& ip,
+      fptn::common::network::IPPacketPtr reset);
+
+  void SetTunSink(
+      std::function<void(fptn::common::network::IPPacketPtr)> sink);
+
  protected:
   bool AddExcludeNetworks(const std::vector<std::string>& networks);
   bool AddIncludeNetworks(const std::vector<std::string>& networks);
@@ -107,6 +115,7 @@ class RouteManager final {
     std::vector<fptn::common::network::IPv4Address> ipv4;
     std::vector<fptn::common::network::IPv6Address> ipv6;
     RoutingPolicy policy;
+    fptn::common::network::IPPacketPtr reset_packet;
   };
 
   bool Enqueue(PendingRoutes routes);
@@ -133,6 +142,8 @@ class RouteManager final {
   std::vector<std::thread> route_workers_;
 
   const Config config_;
+
+  std::function<void(fptn::common::network::IPPacketPtr)> tun_sink_;
 
   std::string tun_interface_name_;
 

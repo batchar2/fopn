@@ -12,12 +12,19 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include "common/network/ip_packet.h"
 
-namespace fptn::adblock {
+#include "plugins/base_plugin.h"
 
-class AdBlocker final {
+namespace fptn::plugin {
+
+class AdBlock final : public BasePlugin {
  public:
-  AdBlocker();
-  explicit AdBlocker(std::unordered_set<std::string> blocked_domains);
+  AdBlock();
+  explicit AdBlock(std::unordered_set<std::string> blocked_domains);
+
+  ~AdBlock() override = default;
+
+  Result HandlePacket(
+      fptn::common::network::IPPacketPtr packet, Direction direction) override;
 
   fptn::common::network::IPPacketPtr ProcessOutgoingDns(
       const fptn::common::network::IPPacket& packet) const;
@@ -30,6 +37,6 @@ class AdBlocker final {
   std::unordered_set<std::string> blocked_domains_;
 };
 
-using AdBlockerPtr = std::shared_ptr<AdBlocker>;
+using AdBlockPtr = std::unique_ptr<AdBlock>;
 
-}  // namespace fptn::adblock
+}  // namespace fptn::plugin

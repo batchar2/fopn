@@ -27,8 +27,8 @@ class DomainBlacklist final : public BasePlugin {
 
   ~DomainBlacklist() override = default;
 
-  std::pair<fptn::common::network::IPPacketPtr, bool> HandlePacket(
-      fptn::common::network::IPPacketPtr packet) override;
+  Result HandlePacket(
+      fptn::common::network::IPPacketPtr packet, Direction direction) override;
 
  private:
   mutable std::mutex mutex_;

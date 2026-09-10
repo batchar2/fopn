@@ -12,6 +12,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <utility>
 #include <vector>
 
+#include "common/network/ip_utils.h"
 #include "common/utils/utils.h"
 
 #include "utils/utils.h"
@@ -41,10 +42,24 @@ DomainBlacklist::DomainBlacklist(const std::vector<std::string>& rules,
   }
 }
 
-std::pair<fptn::common::network::IPPacketPtr, bool>
-DomainBlacklist::HandlePacket(fptn::common::network::IPPacketPtr packet) {
+Result DomainBlacklist::HandlePacket(
+    fptn::common::network::IPPacketPtr packet, Direction direction) {
   bool triggered = false;
-  if (packet->IsDns()) {
+  if (direction == Direction::kOutgoing) {
+    if (packet->IsTCP() && packet->IsIPv4()) {
+      const auto [payload, size] = packet->GetTcpPayload();
+      if (fptn::common::network::IsTlsClientHello(payload, size)) {
+        const auto sni_opt = fptn::common::network::GetTlsSNI(payload, size);
+        if (sni_opt.has_value() &&
+            std::ranges::any_of(rules_, [&sni_opt](const auto& re) {
+              return RE2::PartialMatch(sni_opt.value(), *re);
+            })) {
+          SPDLOG_INFO("Blocked TLS SNI {}", sni_opt.value());
+          return {.packet = nullptr, .reply = nullptr, .triggered = true};
+        }
+      }
+    }
+  } else if (packet->IsDns()) {
     const auto domain_opt = packet->GetDnsDomain();
     if (domain_opt.has_value()) {
       const std::string& domain = domain_opt.value();
@@ -85,7 +100,11 @@ DomainBlacklist::HandlePacket(fptn::common::network::IPPacketPtr packet) {
     if (ipv4_addresses_.contains(src_ipv4)) {
       SPDLOG_INFO("Blocked IPv4 packet from {}",
           packet->GetSrcIPv4Address().ToString());
-      return {nullptr, true};
+      return {
+          .packet = nullptr,
+          .reply = nullptr,
+          .triggered = true,
+      };
     }
   } else if (packet->IsIPv6()) {
     const std::string src_ipv6 = packet->GetSrcIPv6Address().ToString();
@@ -94,10 +113,18 @@ DomainBlacklist::HandlePacket(fptn::common::network::IPPacketPtr packet) {
 
     if (ipv6_addresses_.contains(src_ipv6)) {
       SPDLOG_INFO("Blocked IPv6 packet from {}", src_ipv6);
-      return {nullptr, true};
+      return {
+          .packet = nullptr,
+          .reply = nullptr,
+          .triggered = true,
+      };
     }
   }
-  return {std::move(packet), triggered};
+  return {
+      .packet = std::move(packet),
+      .reply = nullptr,
+      .triggered = triggered,
+  };
 }
 
 }  // namespace fptn::plugin

@@ -4,7 +4,7 @@ Copyright (c) 2024-2026 Stas Skokov
 Distributed under the MIT License (https://opensource.org/licenses/MIT)
 =============================================================================*/
 
-#include "adblock/adblock.h"
+#include "plugins/adblock/adblock.h"
 
 #include <string>
 #include <unordered_set>
@@ -14,9 +14,10 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <spdlog/spdlog.h>  // NOLINT(build/include_order)
 #include <zlib.h>           // NOLINT(build/include_order)
 
+#include "common/network/ip_utils.h"
 #include "common/utils/utils.h"
 
-namespace fptn::adblock {
+namespace fptn::plugin {
 
 extern const unsigned char kBlocklistGz[];
 extern const unsigned int kBlocklistGzLen;
@@ -108,12 +109,12 @@ std::unordered_set<std::string> LoadEmbeddedBlocklist() {
 
 }  // namespace
 
-AdBlocker::AdBlocker() : AdBlocker(LoadEmbeddedBlocklist()) {}
+AdBlock::AdBlock() : AdBlock(LoadEmbeddedBlocklist()) {}
 
-AdBlocker::AdBlocker(std::unordered_set<std::string> blocked_domains)
+AdBlock::AdBlock(std::unordered_set<std::string> blocked_domains)
     : blocked_domains_(std::move(blocked_domains)) {}
 
-bool AdBlocker::IsBlocked(const std::string& domain) const {
+bool AdBlock::IsBlocked(const std::string& domain) const {
   std::string d = domain;
   std::size_t dot = d.find('.');
   while (dot != std::string::npos) {
@@ -126,7 +127,7 @@ bool AdBlocker::IsBlocked(const std::string& domain) const {
   return false;
 }
 
-fptn::common::network::IPPacketPtr AdBlocker::ProcessOutgoingDns(
+fptn::common::network::IPPacketPtr AdBlock::ProcessOutgoingDns(
     const fptn::common::network::IPPacket& packet) const {
   if (!packet.IsDns()) {
     return nullptr;
@@ -140,4 +141,37 @@ fptn::common::network::IPPacketPtr AdBlocker::ProcessOutgoingDns(
   return packet.MakeDnsNullRouteResponse();
 }
 
-}  // namespace fptn::adblock
+Result AdBlock::HandlePacket(
+    fptn::common::network::IPPacketPtr packet, Direction direction) {
+  if (direction == Direction::kOutgoing) {
+    if (packet->IsDns()) {
+      if (auto response = ProcessOutgoingDns(*packet)) {
+        return {
+            .packet = nullptr,
+            .reply = std::move(response),
+            .triggered = true,
+        };
+      }
+    } else if (packet->IsTCP() && packet->IsIPv4()) {
+      const auto [payload, size] = packet->GetTcpPayload();
+      if (fptn::common::network::IsTlsClientHello(payload, size)) {
+        const auto sni_opt = fptn::common::network::GetTlsSNI(payload, size);
+        if (sni_opt.has_value() && IsBlocked(sni_opt.value())) {
+          SPDLOG_INFO("Blocked TLS SNI {}", sni_opt.value());
+          return {
+              .packet = nullptr,
+              .reply = nullptr,
+              .triggered = true,
+          };
+        }
+      }
+    }
+  }
+  return {
+      .packet = std::move(packet),
+      .reply = nullptr,
+      .triggered = false,
+  };
+}
+
+}  // namespace fptn::plugin
