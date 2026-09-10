@@ -52,6 +52,15 @@ class VpnManager final {
   std::size_t GetSendRate();
   std::size_t GetReceiveRate();
   bool IsStarted();
+
+  // Счётчики пакетов велись с самого начала, но геттеров у них не было -
+  // данные копились и никем не читались.
+  std::uint64_t ToServerSent() const noexcept { return to_server_sent_.load(); }
+  std::uint64_t ToServerDropped() const noexcept {
+    return to_server_dropped_.load();
+  }
+  std::uint64_t ToTunSent() const noexcept { return to_tun_sent_.load(); }
+  std::uint64_t ToTunDropped() const noexcept { return to_tun_dropped_.load(); }
   bool IsReconnecting() const;
   int ReconnectAttempt() const;
   int MaxReconnectAttempts() const;

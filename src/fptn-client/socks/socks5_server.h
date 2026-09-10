@@ -152,6 +152,14 @@ class Socks5Server {
   bool Start();
   void Stop();
   bool IsRunning() const noexcept { return running_.load(); }
+  // Счётчики уже велись для отказа при переполнении, но наружу не выходили.
+  std::size_t ActiveSessions() const noexcept {
+    return active_sessions_.load();
+  }
+  std::uint64_t TotalSessions() const noexcept {
+    return session_counter_.load();
+  }
+  std::size_t MaxSessions() const noexcept { return config_.max_sessions; }
 
  private:
   boost::asio::awaitable<void> AcceptLoop();

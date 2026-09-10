@@ -7,11 +7,12 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include "fptn-client/utils/speed_estimator/speed_estimator.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <string>
 #include <thread>
 #include <utility>
@@ -57,112 +58,94 @@ std::uint64_t GetDownloadTimeMs(const ServerInfo& server,
   return kMaxTimeout;
 }
 
-ServerInfo FindFastestServer(const std::string& sni,
-    const std::vector<ServerInfo>& servers,
-    fptn::protocol::https::CensorshipStrategy censorship_strategy,
-    int timeout_sec) {
-  // randomly select half of the servers
-  std::vector<ServerInfo> shuffled_servers = servers;
-  std::random_device rd;
-  std::mt19937 generator(rd());
-  std::ranges::shuffle(shuffled_servers, generator);
-  const std::size_t half_size =
-      std::max<std::size_t>(1, shuffled_servers.size() / 2);
-  std::vector<ServerInfo> selected_servers(
-      shuffled_servers.begin(), shuffled_servers.begin() + half_size);
-
-  struct State {
-    std::mutex mtx;
-    std::condition_variable cv;
-    std::optional<ServerInfo> first_server;
-    std::size_t completed = 0;
-    std::size_t total = 0;
-  };
-  auto state = std::make_shared<State>();
-  state->total = selected_servers.size();
-
-  for (const auto& server : selected_servers) {
-    // NOLINTNEXTLINE(bugprone-exception-escape)
-    std::thread([state, server, sni, timeout_sec, censorship_strategy]() {
-      std::uint64_t ms = kMaxTimeout;
-      try {
-        ms = GetDownloadTimeMs(server, sni, timeout_sec, server.md5_fingerprint,
-            censorship_strategy);
-      } catch (...) {  // NOLINT
-      }
-      {
-        const std::scoped_lock<std::mutex> lock(state->mtx);  // mutex
-        if (ms != kMaxTimeout && !state->first_server.has_value())
-          state->first_server = server;
-        ++state->completed;
-      }
-      state->cv.notify_one();
-    }).detach();
-  }
-
-  std::unique_lock<std::mutex> lock(state->mtx);
-  state->cv.wait_for(lock, std::chrono::seconds(timeout_sec + 2), [&state] {
-    return state->first_server.has_value() || state->completed == state->total;
-  });
-
-  if (!state->first_server.has_value()) {
-    throw std::runtime_error("All servers unavailable!");
-  }
-
-  return *state->first_server;
-}
-
 std::optional<LoginResult> FindServerByLogin(const std::string& sni,
     const std::vector<ServerInfo>& servers,
     fptn::protocol::https::CensorshipStrategy censorship_strategy,
-    int timeout_sec) {
-  std::vector<ServerInfo> shuffled_servers = servers;
-  std::random_device rd;
-  std::mt19937 generator(rd());
-  std::ranges::shuffle(shuffled_servers, generator);
-  const std::size_t half_size =
-      std::max<std::size_t>(1, shuffled_servers.size() / 2);
-  std::vector<ServerInfo> selected_servers(
-      shuffled_servers.begin(), shuffled_servers.begin() + half_size);
+    int timeout_sec,
+    ProbeCallback on_probe) {
+  if (servers.empty()) {
+    return std::nullopt;
+  }
 
+  // Раньше список перемешивался и опрашивалась случайная половина: быстрый
+  // сервер мог просто не попасть в выборку, и клиент про него не узнавал.
+  // Теперь опрашиваются все, но не больше kMaxProbeConcurrency разом.
   struct State {
     std::mutex mtx;
     std::condition_variable cv;
     std::optional<LoginResult> result;
+    std::atomic<std::size_t> next{0};
     std::size_t completed = 0;
     std::size_t total = 0;
   };
   auto state = std::make_shared<State>();
-  state->total = selected_servers.size();
+  state->total = servers.size();
 
-  for (const auto& server : selected_servers) {
+  auto pool = std::make_shared<std::vector<ServerInfo>>(servers);
+  auto probe = std::make_shared<ProbeCallback>(std::move(on_probe));
+
+  const std::size_t workers =
+      std::min<std::size_t>(kMaxProbeConcurrency, servers.size());
+
+  for (std::size_t worker = 0; worker < workers; ++worker) {
     // NOLINTNEXTLINE(bugprone-exception-escape)
-    std::thread([state, server, sni, timeout_sec, censorship_strategy]() {
-      std::optional<LoginResult> local;
-      try {
-        const std::string body =
-            fmt::format(R"({{ "username": "{}", "password": "{}" }})",
-                server.username, server.password);
-        ApiClient cli(server.host, server.port, sni, server.md5_fingerprint,
-            censorship_strategy);
-        const auto resp = cli.Post(
-            common::api::kApiLoginUrl, body, "application/json", timeout_sec);
-        if (resp.code == 200) {
-          const auto msg = resp.Json();
-          if (msg.contains("access_token")) {
-            local = LoginResult{.server = server,
-                .access_token = msg["access_token"].get<std::string>()};
-          }
+    std::thread([state, pool, probe, sni, timeout_sec, censorship_strategy]() {
+      for (;;) {
+        const std::size_t index = state->next.fetch_add(1);
+        if (index >= pool->size()) {
+          return;
         }
-      } catch (...) {  // NOLINT
+        const auto& server = (*pool)[index];
+
+        std::optional<LoginResult> local;
+        std::string error;
+        const auto started = std::chrono::steady_clock::now();
+        try {
+          const std::string body =
+              fmt::format(R"({{ "username": "{}", "password": "{}" }})",
+                  server.username, server.password);
+          ApiClient cli(server.host, server.port, sni, server.md5_fingerprint,
+              censorship_strategy);
+          const auto resp = cli.Post(
+              common::api::kApiLoginUrl, body, "application/json", timeout_sec);
+          if (resp.code == 200) {
+            const auto msg = resp.Json();
+            if (msg.contains("access_token")) {
+              local = LoginResult{.server = server,
+                  .access_token = msg["access_token"].get<std::string>()};
+            } else {
+              error = "no access_token in response";
+            }
+          } else {
+            error = fmt::format("HTTP {}", resp.code);
+          }
+        } catch (const std::exception& ex) {
+          error = ex.what();
+        } catch (...) {  // NOLINT
+          error = "unknown error";
+        }
+
+        // Время логина - это и есть задержка до сервера: лёгкий запрос без
+        // скачивания тестового файла, поэтому число отражает канал, а не
+        // ширину полосы.
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started)
+                .count();
+        if (probe && *probe) {
+          const auto delay = local ? std::max<std::int64_t>(1, elapsed) : 0;
+          (*probe)(server, static_cast<std::uint32_t>(delay), error);
+        }
+
+        {
+          const std::scoped_lock<std::mutex> lock(state->mtx);
+          if (local && !state->result.has_value()) {
+            state->result = std::move(local);
+          }
+          ++state->completed;
+        }
+        state->cv.notify_one();
       }
-      {
-        const std::scoped_lock<std::mutex> lock(state->mtx);
-        if (local && !state->result.has_value())
-          state->result = std::move(local);
-        ++state->completed;
-      }
-      state->cv.notify_one();
     }).detach();
   }
 
@@ -171,6 +154,8 @@ std::optional<LoginResult> FindServerByLogin(const std::string& sni,
     return state->result.has_value() || state->completed == state->total;
   });
 
+  // Оставшиеся потоки домеривают пул в фоне и дописывают результаты через
+  // колбэк - выбор сервера их не ждёт.
   return state->result;
 }
 

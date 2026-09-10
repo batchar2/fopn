@@ -80,7 +80,11 @@ add_executable(
   "${SPLIT_TUNNEL_GENERATED}"
   utils/speed_estimator/speed_estimator.cpp
   utils/speed_estimator/speed_estimator.h
-  utils/speed_estimator/server_info.h)
+  utils/speed_estimator/server_info.h
+  status/server_registry.cpp
+  status/server_registry.h
+  status/status_server.cpp
+  status/status_server.h)
 
 target_link_libraries(
   "${PROJECT_NAME}-cli"

@@ -102,11 +102,6 @@ bool ConfigFile::Parse() {
   }
 }
 
-ServerInfo ConfigFile::FindFastestServer(int timeout_sec) const {
-  return fptn::utils::speed_estimator::FindFastestServer(
-      sni_, servers_, censorship_strategy_, timeout_sec);
-}
-
 std::optional<fptn::utils::speed_estimator::LoginResult>
 ConfigFile::FindServerByLogin(int timeout_sec) const {
   // Ensure every server has credentials (CLI path sets them at ConfigFile

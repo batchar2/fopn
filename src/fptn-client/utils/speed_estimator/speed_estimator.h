@@ -7,6 +7,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -22,20 +23,27 @@ struct LoginResult {
   std::string access_token;
 };
 
+// Результат одной пробы: сколько заняла и почему не удалась. Раньше замеры
+// жили только внутри гонки и выбрасывались - наружу не выходило ни одного
+// числа, поэтому ни список серверов, ни их задержки показать было нечем.
+using ProbeCallback = std::function<void(const ServerInfo& server,
+    std::uint32_t delay_ms,
+    const std::string& error)>;
+
+// Сколько серверов опрашиваем одновременно. Раньше на каждый сервер
+// заводился отдельный поток; на роутере с большим пулом это заметно.
+constexpr std::size_t kMaxProbeConcurrency = 8;
+
 std::uint64_t GetDownloadTimeMs(const ServerInfo& server,
     const std::string& sni,
     int timeout,
     const std::string& md5_fingerprint,
     fptn::protocol::https::CensorshipStrategy censorship_strategy);
 
-ServerInfo FindFastestServer(const std::string& sni,
-    const std::vector<ServerInfo>& servers,
-    fptn::protocol::https::CensorshipStrategy censorship_strategy,
-    int timeout_sec = 15);
-
 std::optional<LoginResult> FindServerByLogin(const std::string& sni,
     const std::vector<ServerInfo>& servers,
     fptn::protocol::https::CensorshipStrategy censorship_strategy,
-    int timeout_sec = 15);
+    int timeout_sec = 15,
+    ProbeCallback on_probe = {});
 
 };  // namespace fptn::utils::speed_estimator

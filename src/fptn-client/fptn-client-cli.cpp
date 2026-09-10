@@ -57,6 +57,8 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include "utils/signal/main_loop.h"
 #include "vpn/vpn_manager.h"
 
+#include "fptn-client/status/server_registry.h"
+#include "fptn-client/status/status_server.h"
 #include "fptn-client/socks/socks5_server.h"
 #include "fptn-protocol-lib/https/socket_options.h"
 
@@ -304,12 +306,19 @@ std::optional<fptn::utils::speed_estimator::LoginResult> SelectServer(
     std::vector<ServerInfo> servers,
     const std::string& sni,
     fptn::protocol::https::CensorshipStrategy censorship_strategy,
-    int max_ping_ms) {
+    int max_ping_ms,
+    const std::shared_ptr<fptn::client::status::ServerRegistry>& registry) {
   std::optional<fptn::utils::speed_estimator::LoginResult> last;
 
   for (int round = 0; round < 3 && !servers.empty(); ++round) {
-    auto result = fptn::utils::speed_estimator::FindServerByLogin(
-        sni, servers, censorship_strategy, 10);
+    auto result = fptn::utils::speed_estimator::FindServerByLogin(sni, servers,
+        censorship_strategy, 10,
+        [registry](const ServerInfo& server, std::uint32_t delay_ms,
+            const std::string& error) {
+          if (registry) {
+            registry->RecordProbe(server, delay_ms, error);
+          }
+        });
     if (!result) {
       return last;
     }
@@ -347,18 +356,91 @@ std::optional<fptn::utils::speed_estimator::LoginResult> SelectServer(
 // насовсем. Теперь сторож просто останавливает туннель - главный цикл выходит
 // сам, SOCKS и маршруты убираются штатно, procd поднимает процесс заново.
 // (ZeroBlock --max-ping не передаёт, поэтому там сторож не создаётся вовсе.)
+// Плановый обход всего пула. Без него в реестре живёт только один замер -
+// тот, что случился при выборе сервера на старте, - и список серверов
+// показывает давно протухшие числа. Сервер, который лежал при запуске и с тех
+// пор поднялся, иначе никогда не станет снова кандидатом.
+class PoolMonitor final {
+ public:
+  PoolMonitor(std::shared_ptr<fptn::client::status::ServerRegistry> registry,
+      std::string sni,
+      fptn::protocol::https::CensorshipStrategy censorship_strategy,
+      std::chrono::seconds interval)
+      : registry_(std::move(registry)),
+        sni_(std::move(sni)),
+        censorship_strategy_(censorship_strategy),
+        interval_(interval) {
+    thread_ = std::thread([this] { Run(); });
+  }
+
+  ~PoolMonitor() {
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      running_ = false;
+    }
+    cv_.notify_all();
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  PoolMonitor(const PoolMonitor&) = delete;
+  PoolMonitor& operator=(const PoolMonitor&) = delete;
+
+ private:
+  void Run() {
+    while (Wait(interval_)) {
+      const auto servers = registry_->Servers();
+      for (const auto& server : servers) {
+        if (!Running()) {
+          return;
+        }
+        const auto ms = fptn::utils::speed_estimator::GetDownloadTimeMs(
+            server, sni_, 5, server.md5_fingerprint, censorship_strategy_);
+        const std::uint32_t delay =
+            ms == UINT64_MAX ? 0 : static_cast<std::uint32_t>(ms);
+        registry_->RecordProbe(
+            server, delay, delay == 0 ? "probe failed" : "");
+      }
+    }
+  }
+
+  bool Running() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return running_;
+  }
+
+  bool Wait(std::chrono::seconds period) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait_for(lock, period, [this] { return !running_; });
+    return running_;
+  }
+
+  const std::shared_ptr<fptn::client::status::ServerRegistry> registry_;
+  const std::string sni_;
+  const fptn::protocol::https::CensorshipStrategy censorship_strategy_;
+  const std::chrono::seconds interval_;
+
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  bool running_ = true;
+  std::thread thread_;
+};
+
 class LatencyWatchdog final {
  public:
   LatencyWatchdog(ServerInfo server,
       std::string sni,
       fptn::protocol::https::CensorshipStrategy censorship_strategy,
       int max_ping_ms,
-      std::function<void()> on_over_limit)
+      std::function<void()> on_over_limit,
+      std::shared_ptr<fptn::client::status::ServerRegistry> registry = {})
       : server_(std::move(server)),
         sni_(std::move(sni)),
         censorship_strategy_(censorship_strategy),
         max_ping_ms_(max_ping_ms),
-        on_over_limit_(std::move(on_over_limit)) {
+        on_over_limit_(std::move(on_over_limit)),
+        registry_(std::move(registry)) {
     thread_ = std::thread([this] { Run(); });
   }
 
@@ -379,6 +461,14 @@ class LatencyWatchdog final {
     while (Wait(std::chrono::seconds(60))) {
       const auto ms = fptn::utils::speed_estimator::GetDownloadTimeMs(
           server_, sni_, 5, server_.md5_fingerprint, censorship_strategy_);
+      if (registry_) {
+        // UINT64_MAX означает, что сервер не ответил; в реестре неудача
+        // записывается нулём, как это принято в Clash API.
+        const std::uint32_t delay =
+            ms == UINT64_MAX ? 0 : static_cast<std::uint32_t>(ms);
+        registry_->RecordProbe(
+            server_, delay, delay == 0 ? "latency check failed" : "");
+      }
       if (ms <= static_cast<std::uint64_t>(max_ping_ms_)) {
         over_limit = 0;
         continue;
@@ -406,6 +496,7 @@ class LatencyWatchdog final {
   const fptn::protocol::https::CensorshipStrategy censorship_strategy_;
   const int max_ping_ms_;
   const std::function<void()> on_over_limit_;
+  const std::shared_ptr<fptn::client::status::ServerRegistry> registry_;
 
   std::mutex mutex_;
   std::condition_variable cv_;
@@ -770,6 +861,24 @@ int main(int argc, char* argv[]) {
         .default_value(1080)
         .scan<'i', int>()
         .help("Routing table id used for SOCKS traffic (default: 1080)");
+    args.add_argument("--status-listen")
+        .default_value(std::string(""))
+        .help(
+            "Serve a local HTTP status API with the server pool and their "
+            "latency, e.g. 127.0.0.1:9091. The JSON matches the Clash API, so "
+            "existing dashboards and transparent proxies can read it as is");
+    args.add_argument("--status-secret")
+        .default_value(std::string(""))
+        .help(
+            "Token for the status API: requests must carry "
+            "'Authorization: Bearer <token>'. Empty means no check");
+    args.add_argument("--probe-interval")
+        .default_value(0)
+        .scan<'i', int>()
+        .help(
+            "Re-measure every server in the pool every N seconds, so the "
+            "status API shows fresh latency instead of one reading taken at "
+            "startup. 0 (default) disables it");
 
     try {
       args.parse_args(ExpandConfigFile(argc, argv));
@@ -836,6 +945,9 @@ int main(int argc, char* argv[]) {
     const bool disable_routing =
         args.get<bool>("--disable-routing") || socks_enabled;
     const auto socks_route_table = args.get<int>("--socks-route-table");
+    const auto status_listen = args.get<std::string>("--status-listen");
+    const auto status_secret = args.get<std::string>("--status-secret");
+    const auto probe_interval = args.get<int>("--probe-interval");
 
     std::uint32_t routing_mark = 0;
     {
@@ -972,6 +1084,9 @@ int main(int argc, char* argv[]) {
     fptn::utils::speed_estimator::ServerInfo selected_server;
     std::string pre_obtained_token;
     bool server_pinned = false;
+    // Реестр переживает выбор сервера: пул и замеры нужны всё время работы,
+    // а не только на старте.
+    auto registry = std::make_shared<fptn::client::status::ServerRegistry>();
     try {
       const auto servers = ExcludeServers(
           CollectServers(access_tokens, sni, censorship_strategy),
@@ -980,6 +1095,7 @@ int main(int argc, char* argv[]) {
         SPDLOG_ERROR("No servers left after --exclude-servers");
         return EXIT_FAILURE;
       }
+      registry->Reset(servers);
       SPDLOG_INFO("Tokens: {}, servers: {}", access_tokens.size(),
           servers.size());
 
@@ -996,8 +1112,8 @@ int main(int argc, char* argv[]) {
         }
       }
       if (use_login_race) {
-        auto login_result =
-            SelectServer(servers, sni, censorship_strategy, max_ping);
+        auto login_result = SelectServer(
+            servers, sni, censorship_strategy, max_ping, registry);
         if (!login_result) {
           SPDLOG_ERROR("All servers unavailable!");
           return EXIT_FAILURE;
@@ -1005,6 +1121,7 @@ int main(int argc, char* argv[]) {
         selected_server = login_result->server;
         pre_obtained_token = std::move(login_result->access_token);
       }
+      registry->SetActive(selected_server);
     } catch (const std::runtime_error& err) {
       SPDLOG_ERROR("Config error: {}", err.what());
       return EXIT_FAILURE;
@@ -1178,18 +1295,96 @@ int main(int argc, char* argv[]) {
       }
     }
 
+    /* local status API */
+    std::unique_ptr<fptn::client::status::StatusServer> status_server;
+    if (!status_listen.empty()) {
+      const auto colon = status_listen.rfind(':');
+      if (colon == std::string::npos) {
+        SPDLOG_ERROR(
+            "Invalid --status-listen value '{}', expected <address>:<port>",
+            status_listen);
+        return EXIT_FAILURE;
+      }
+      fptn::client::status::StatusServer::Options options;
+      options.listen_address = status_listen.substr(0, colon);
+      options.secret = status_secret;
+      try {
+        options.listen_port = static_cast<std::uint16_t>(
+            std::stoi(status_listen.substr(colon + 1)));
+      } catch (const std::exception&) {
+        SPDLOG_ERROR("Invalid port in --status-listen '{}'", status_listen);
+        return EXIT_FAILURE;
+      }
+
+      status_server = std::make_unique<fptn::client::status::StatusServer>(
+          options, registry);
+      status_server->SetDelayProbe(
+          [sni, censorship_strategy](const ServerInfo& server,
+              int timeout_ms) -> std::uint32_t {
+            const int timeout_sec = std::max(1, timeout_ms / 1000);
+            const auto ms = fptn::utils::speed_estimator::GetDownloadTimeMs(
+                server, sni, timeout_sec, server.md5_fingerprint,
+                censorship_strategy);
+            return ms == UINT64_MAX ? 0 : static_cast<std::uint32_t>(ms);
+          });
+      status_server->SetStatusProvider([&vpn_client, &socks_server,
+                                           &selected_server, &sni,
+                                           bypass_method]() {
+        nlohmann::json socks = nlohmann::json{{"enabled", false}};
+        if (socks_server) {
+          socks = nlohmann::json{{"enabled", true},
+              {"running", socks_server->IsRunning()},
+              {"active_sessions", socks_server->ActiveSessions()},
+              {"total_sessions", socks_server->TotalSessions()},
+              {"max_sessions", socks_server->MaxSessions()}};
+        }
+        return nlohmann::json{{"version", FPTN_VERSION},
+            {"tunnel",
+                nlohmann::json{{"connected", vpn_client.IsStarted()},
+                    {"reconnecting", vpn_client.IsReconnecting()},
+                    {"reconnect_attempt", vpn_client.ReconnectAttempt()},
+                    {"interface", vpn_client.GetInterfaceName()},
+                    {"send_rate", vpn_client.GetSendRate()},
+                    {"receive_rate", vpn_client.GetReceiveRate()},
+                    {"to_server_sent", vpn_client.ToServerSent()},
+                    {"to_server_dropped", vpn_client.ToServerDropped()},
+                    {"to_tun_sent", vpn_client.ToTunSent()},
+                    {"to_tun_dropped", vpn_client.ToTunDropped()},
+                    {"server", fptn::client::status::ServerRegistry::
+                                   DisplayName(selected_server)},
+                    {"sni", sni}, {"bypass_method", bypass_method}}},
+            {"socks", std::move(socks)}};
+      });
+      // Переключение сервера на лету клиент пока не умеет: смена узла
+      // возможна только перезапуском процесса, поэтому PUT честно отвечает
+      // 503, а не делает вид, что сработал.
+      if (!status_server->Start()) {
+        SPDLOG_ERROR("Failed to start the status API");
+        return EXIT_FAILURE;
+      }
+    }
+
     /* start event loop */
     // Not while a server is pinned by name: a restart would pin the same one
     // again, and asking for it is the user's decision.
+    std::unique_ptr<PoolMonitor> pool_monitor;
+    if (probe_interval > 0) {
+      pool_monitor = std::make_unique<PoolMonitor>(registry, sni,
+          censorship_strategy, std::chrono::seconds(probe_interval));
+    }
+
     std::unique_ptr<LatencyWatchdog> watchdog;
     if (max_ping > 0 && !server_pinned) {
       watchdog = std::make_unique<LatencyWatchdog>(selected_server, sni,
-          censorship_strategy, max_ping, [&vpn_client]() {
-            vpn_client.Stop();
-          });
+          censorship_strategy, max_ping,
+          [&vpn_client]() { vpn_client.Stop(); }, registry);
     }
     fptn::utils::WaitForSignal(vpn_client);
     watchdog.reset();
+    pool_monitor.reset();
+    if (status_server) {
+      status_server->Stop();
+    }
 
     /* clean */
     if (socks_server) {
