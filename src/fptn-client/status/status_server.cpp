@@ -199,6 +199,9 @@ void StatusServer::HandleConnection(tcp::socket socket) {
     response.body() = reply.body.dump();
   }
 
+  if (response.result_int() == 204 || response.result_int() == 304) {
+    response.body().clear();
+  }
   response.prepare_payload();
   http::write(stream, response, ec);
   stream.socket().shutdown(tcp::socket::shutdown_send, ec);
@@ -267,7 +270,10 @@ StatusServer::Reply StatusServer::HandleSwitch(
     return Reply{
         503, nlohmann::json{{"message", "Server switch was refused"}}};
   }
-  return Reply{204, nlohmann::json::object()};
+  // Clash отвечает на переключение 204, но пустой ответ в этом API - редкость,
+  // и клиенту полезнее увидеть, куда именно он переключился.
+  return Reply{
+      200, nlohmann::json{{"now", ServerRegistry::DisplayName(*server)}}};
 }
 
 StatusServer::Reply StatusServer::Route(const std::string& method,

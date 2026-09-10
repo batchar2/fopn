@@ -50,6 +50,9 @@ bool VpnManager::IsStarted() {
   if (gave_up_) {
     return false;
   }
+  if (switching_) {
+    return true;
+  }
   if (ever_connected_) {
     return true;
   }
@@ -123,6 +126,69 @@ bool VpnManager::Start() {
 
   supervisor_thread_ = std::thread(&VpnManager::Supervise, this);
 
+  return true;
+}
+
+bool VpnManager::IsClientStarted() const {
+  // Клиент можно подменить на лету, поэтому указатель читаем под мьютексом.
+  const std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+  return lock.owns_lock() && config_.http_client &&
+         config_.http_client->IsStarted();
+}
+
+bool VpnManager::IsClientConnected() const {
+  const std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+  return lock.owns_lock() && config_.http_client &&
+         config_.http_client->IsConnected();
+}
+
+bool VpnManager::SwitchClient(
+    const std::function<fptn::vpn::http::ClientPtr()>& make_client) {
+  if (!make_client || !running_) {
+    return false;
+  }
+
+  // Флаг снимает панику главного цикла: пока идёт смена, туннель формально
+  // не подключён, но это не обрыв.
+  switching_ = true;
+
+  const std::unique_lock<std::mutex> lock(mutex_);  // mutex
+
+  if (!running_ || !config_.http_client) {
+    switching_ = false;
+    return false;
+  }
+
+  SPDLOG_INFO("Switching the tunnel to another server");
+
+  // Сессию отпускаем до логина: сервер может считать сессии на пользователя,
+  // и вход со второго места он бы отклонил.
+  auto previous = std::move(config_.http_client);
+  previous->Stop();
+
+  auto client = make_client();
+  if (!client) {
+    SPDLOG_WARN("Switch failed, staying on the current server");
+    config_.http_client = std::move(previous);
+    config_.http_client->Start();
+    switching_ = false;
+    return false;
+  }
+
+  config_.http_client = std::move(client);
+  // NOLINTNEXTLINE(modernize-avoid-bind)
+  config_.http_client->SetRecvBatchIPPacketCallback(std::bind(
+      &VpnManager::HandleOnPacketsFromWebSocket, this, std::placeholders::_1));
+  config_.http_client->Start();
+
+  // ever_connected_ не трогаем: это признак "туннель хоть раз поднимался", и
+  // смена сервера его не отменяет. Сбросить его здесь означало бы, что
+  // IsStarted() на время переключения отвечает "нет" - главный цикл принимает
+  // это за обрыв и завершает процесс.
+  reconnecting_ = false;
+  reconnect_attempt_ = 0;
+
+  switching_ = false;
   return true;
 }
 
@@ -337,12 +403,12 @@ void VpnManager::Supervise() {
     {
       std::unique_lock<std::mutex> lock(reconnect_mutex_);
       reconnect_cv_.wait_for(lock, std::chrono::milliseconds(500),
-          [this]() { return !running_ || !config_.http_client->IsStarted(); });
+          [this]() { return !running_ || !IsClientStarted(); });
     }
     if (!running_) {
       break;
     }
-    if (config_.http_client->IsConnected()) {
+    if (IsClientConnected()) {
       ever_connected_ = true;
       full_restart_count = 0;
       reconnecting_ = false;
@@ -353,7 +419,7 @@ void VpnManager::Supervise() {
       reconnect_attempt_ = std::max(full_restart_count, 1);
       reconnecting_ = true;
     }
-    if (config_.http_client->IsStarted()) {
+    if (IsClientStarted()) {
       continue;
     }
 

@@ -1126,11 +1126,49 @@ int main(int argc, char* argv[]) {
       SPDLOG_ERROR("Config error: {}", err.what());
       return EXIT_FAILURE;
     }
+    // Адрес выбранного сервера нужен ещё и менеджеру маршрутов: он исключает
+    // его из туннеля, иначе получился бы туннель в туннеле.
     const auto server_ip = fptn::routing::ResolveDomain(selected_server.host);
     if (server_ip.IsEmpty()) {
       SPDLOG_ERROR("DNS resolve error: {}", selected_server.host);
       return EXIT_FAILURE;
     }
+
+    // Собрать подключение к конкретному серверу. Вынесено отдельно, потому
+    // что то же самое нужно при смене сервера на лету.
+    using fptn::vpn::http::ClientPtr;
+    auto make_client = [&](const ServerInfo& server, const std::string& token,
+                           int login_timeout_sec = 10) -> ClientPtr {
+      const auto ip = fptn::routing::ResolveDomain(server.host);
+      if (ip.IsEmpty()) {
+        SPDLOG_ERROR("DNS resolve error: {}", server.host);
+        return nullptr;
+      }
+      auto client = std::make_unique<fptn::vpn::http::Client>(
+          fptn::protocol::https::ConnectionConfig{
+              .common ={
+                      .server_ip = ip,
+                      .server_port = static_cast<std::uint16_t>(server.port),
+                      .sni = sni,
+                      .md5_fingerprint = server.md5_fingerprint,
+                      .client_version = FPTN_VERSION,
+                      .censorship_strategy = censorship_strategy,
+                      .tun_interface_address_ipv4 = tun_interface_address_ipv4,
+                      .tun_interface_address_ipv6 = tun_interface_address_ipv6,
+                  }},
+          connection_strategy);
+      if (!token.empty()) {
+        client->SetAccessToken(token);
+      }
+      if (!client->Login(
+              server.username, server.password, login_timeout_sec)) {
+        SPDLOG_ERROR("Login to {} failed (code {}): {}",
+            fptn::client::status::ServerRegistry::DisplayName(server),
+            client->LatestErrorCode(), client->LatestError());
+        return nullptr;
+      }
+      return client;
+    };
 
     SPDLOG_INFO(
         "\n--- Starting client ---\n"
@@ -1163,29 +1201,8 @@ int main(int argc, char* argv[]) {
         split_domains_str, blacklist_domains_str);
 
     /* auth & dns */
-    auto http_client = std::make_unique<fptn::vpn::http::Client>(
-        fptn::protocol::https::ConnectionConfig{
-            .common ={
-                    .server_ip = server_ip,
-                    .server_port =
-                        static_cast<std::uint16_t>(selected_server.port),
-                    .sni = sni,
-                    .md5_fingerprint = selected_server.md5_fingerprint,
-                    .client_version = FPTN_VERSION,
-                    .censorship_strategy = censorship_strategy,
-                    .tun_interface_address_ipv4 = tun_interface_address_ipv4,
-                    .tun_interface_address_ipv6 = tun_interface_address_ipv6,
-                }},
-        connection_strategy);
-
-    if (!pre_obtained_token.empty()) {
-      http_client->SetAccessToken(pre_obtained_token);
-    }
-    const bool status = http_client->Login(
-        selected_server.username, selected_server.password);
-    if (!status) {
-      SPDLOG_ERROR("Login failed (code {}): {}", http_client->LatestErrorCode(),
-          http_client->LatestError());
+    auto http_client = make_client(selected_server, pre_obtained_token);
+    if (!http_client) {
       return EXIT_FAILURE;
     }
     const auto [dns_server_ipv4, dns_server_ipv6] = http_client->GetDns();
@@ -1295,6 +1312,11 @@ int main(int argc, char* argv[]) {
       }
     }
 
+    // Объявлен до статус-API: смена сервера пересоздаёт сторожа, а он должен
+    // мерить уже новый узел.
+    std::unique_ptr<LatencyWatchdog> watchdog;
+    std::mutex switch_mutex;
+
     /* local status API */
     std::unique_ptr<fptn::client::status::StatusServer> status_server;
     if (!status_listen.empty()) {
@@ -1327,9 +1349,8 @@ int main(int argc, char* argv[]) {
                 censorship_strategy);
             return ms == UINT64_MAX ? 0 : static_cast<std::uint32_t>(ms);
           });
-      status_server->SetStatusProvider([&vpn_client, &socks_server,
-                                           &selected_server, &sni,
-                                           bypass_method]() {
+      status_server->SetStatusProvider(
+          [&vpn_client, &socks_server, registry, &sni, bypass_method]() {
         nlohmann::json socks = nlohmann::json{{"enabled", false}};
         if (socks_server) {
           socks = nlohmann::json{{"enabled", true},
@@ -1350,14 +1371,66 @@ int main(int argc, char* argv[]) {
                     {"to_server_dropped", vpn_client.ToServerDropped()},
                     {"to_tun_sent", vpn_client.ToTunSent()},
                     {"to_tun_dropped", vpn_client.ToTunDropped()},
-                    {"server", fptn::client::status::ServerRegistry::
-                                   DisplayName(selected_server)},
+                    {"server", registry->ToJson().value("current", "")},
                     {"sni", sni}, {"bypass_method", bypass_method}}},
             {"socks", std::move(socks)}};
       });
-      // Переключение сервера на лету клиент пока не умеет: смена узла
-      // возможна только перезапуском процесса, поэтому PUT честно отвечает
-      // 503, а не делает вид, что сработал.
+      status_server->SetSwitchServer([&](const ServerInfo& server) -> bool {
+        const std::scoped_lock<std::mutex> lock(switch_mutex);
+
+        // Менеджер маршрутов исключает из туннеля адрес того сервера, с
+        // которым его подняли, и переписать это исключение на лету нельзя.
+        // Там, где маршрутами владеет другой демон, исключать нечего.
+        if (route_manager) {
+          SPDLOG_WARN(
+              "Server switching needs --disable-routing: the route manager "
+              "pins the current server address");
+          return false;
+        }
+
+        if (fptn::client::status::ServerRegistry::KeyOf(server) ==
+            fptn::client::status::ServerRegistry::KeyOf(selected_server)) {
+          return true;  // уже на нём
+        }
+
+        // Смена гасит текущую сессию до того, как получится новая: сервер
+        // считает сессии на пользователя и второй вход бы отклонил. Значит
+        // сначала убеждаемся, что новый узел вообще отвечает - иначе
+        // рабочий туннель встал бы на всё время неудачных попыток входа.
+        const auto probe = fptn::utils::speed_estimator::GetDownloadTimeMs(
+            server, sni, 5, server.md5_fingerprint, censorship_strategy);
+        const std::uint32_t probe_ms =
+            probe == UINT64_MAX ? 0 : static_cast<std::uint32_t>(probe);
+        registry->RecordProbe(
+            server, probe_ms, probe_ms == 0 ? "unreachable" : "");
+        if (probe_ms == 0) {
+          SPDLOG_WARN("{} did not answer, staying on the current server",
+              fptn::client::status::ServerRegistry::DisplayName(server));
+          return false;
+        }
+
+        if (!vpn_client.SwitchClient(
+                [&]() { return make_client(server, "", 5); })) {
+          SPDLOG_ERROR("Could not switch the tunnel to {}",
+              fptn::client::status::ServerRegistry::DisplayName(server));
+          return false;
+        }
+
+        selected_server = server;
+        registry->SetActive(server);
+        SPDLOG_INFO("Switched to {}",
+            fptn::client::status::ServerRegistry::DisplayName(server));
+
+        // Сторож следил за прежним узлом - пересобираем его под новый.
+        if (max_ping > 0) {
+          watchdog.reset();
+          watchdog = std::make_unique<LatencyWatchdog>(server, sni,
+              censorship_strategy, max_ping,
+              [&vpn_client]() { vpn_client.Stop(); }, registry);
+        }
+        return true;
+      });
+
       if (!status_server->Start()) {
         SPDLOG_ERROR("Failed to start the status API");
         return EXIT_FAILURE;
@@ -1373,7 +1446,6 @@ int main(int argc, char* argv[]) {
           censorship_strategy, std::chrono::seconds(probe_interval));
     }
 
-    std::unique_ptr<LatencyWatchdog> watchdog;
     if (max_ping > 0 && !server_pinned) {
       watchdog = std::make_unique<LatencyWatchdog>(selected_server, sni,
           censorship_strategy, max_ping,

@@ -8,6 +8,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -49,6 +50,18 @@ class VpnManager final {
 
   bool Start();
   bool Stop();
+
+  // Заменить сервер, не поднимая туннель заново: TUN уже открыт, маршруты
+  // применены, меняется только та сторона, к которой мы подключены. Раньше
+  // сменой сервера был выход из процесса - procd поднимал клиент снова, и он
+  // приходил на тот же самый сервер.
+  //
+  // Принимает фабрику, а не готовое соединение: логин на новый сервер должен
+  // произойти уже после того, как отпущена текущая сессия. Иначе сервер с
+  // лимитом сессий на пользователя откажет во входе. Если фабрика вернула
+  // пустое соединение, прежнее поднимается обратно.
+  bool SwitchClient(
+      const std::function<fptn::vpn::http::ClientPtr()>& make_client);
   std::size_t GetSendRate();
   std::size_t GetReceiveRate();
   bool IsStarted();
@@ -67,6 +80,8 @@ class VpnManager final {
   [[nodiscard]] std::string GetInterfaceName() const;
 
  protected:
+  [[nodiscard]] bool IsClientStarted() const;
+  [[nodiscard]] bool IsClientConnected() const;
   void ProcessWebSocketPackets();
   void Supervise();
 
@@ -84,6 +99,9 @@ class VpnManager final {
   std::atomic<bool> ever_connected_;
   std::atomic<bool> gave_up_;
   std::atomic<bool> reconnecting_;
+  // Идёт смена сервера: соединения в этот момент нет, но обрывом это считать
+  // нельзя - иначе главный цикл завершит процесс.
+  std::atomic<bool> switching_{false};
   std::atomic<int> reconnect_attempt_;
 
   std::atomic<std::size_t> last_send_rate_{0};
