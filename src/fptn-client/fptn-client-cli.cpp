@@ -68,27 +68,43 @@ using fptn::utils::speed_estimator::ServerInfo;
 // с которым запускают демоны на роутере, кончается за пару часов офисной
 // нагрузки: accept начинает возвращать EMFILE, и прокси перестаёт принимать
 // соединения, оставаясь при этом живым процессом.
-void RaiseFileDescriptorLimit() {
+// Возвращает лимит, с которым процесс в итоге остался: от него считается
+// потолок сессий SOCKS.
+std::size_t RaiseFileDescriptorLimit() {
   struct rlimit limit {};
   if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
-    return;
+    return 0;
   }
   const rlim_t previous = limit.rlim_cur;
   if (limit.rlim_cur >= limit.rlim_max) {
     SPDLOG_INFO("File descriptor limit: {} (already at maximum)", previous);
-    return;
+    return static_cast<std::size_t>(limit.rlim_cur);
   }
   limit.rlim_cur = limit.rlim_max;
   if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
     SPDLOG_WARN("Failed to raise the file descriptor limit from {}", previous);
-    return;
+    return static_cast<std::size_t>(previous);
   }
   SPDLOG_INFO("File descriptor limit raised: {} -> {}", previous,
       limit.rlim_cur);
+  return static_cast<std::size_t>(limit.rlim_cur);
 }
 #else
-void RaiseFileDescriptorLimit() {}
+std::size_t RaiseFileDescriptorLimit() { return 0; }
 #endif
+
+// Сессия занимает два дескриптора, плюс запас на туннель, логи и служебные
+// сокеты. Фиксированное число тут врёт: на роутере лимит бывает и 1024, и
+// 4096, и потолок должен считаться от него, а не стоять константой.
+std::size_t DefaultMaxSocksSessions(std::size_t fd_limit) {
+  constexpr std::size_t kReserved = 256;
+  constexpr std::size_t kFallback = 512;
+  constexpr std::size_t kMinimum = 64;
+  if (fd_limit <= kReserved) {
+    return kFallback;
+  }
+  return std::max(kMinimum, (fd_limit - kReserved) / 2);
+}
 
 // Servers of every token in one pool, each carrying the credentials of the
 // token it came from.
@@ -406,7 +422,7 @@ int main(int argc, char* argv[]) {
   }
 #endif
   try {
-    RaiseFileDescriptorLimit();
+    const std::size_t fd_limit = RaiseFileDescriptorLimit();
     const std::set<std::string> bypass_methods = {"obfuscation",
         /* chrome */
         "sni-spoofing-chrome-149", "sni-spoofing-chrome-148",
@@ -694,6 +710,12 @@ int main(int argc, char* argv[]) {
         .help(
             "Run a SOCKS5 server that forwards connections through the tunnel, "
             "e.g. 127.0.0.1:1080. Implies --disable-routing");
+    args.add_argument("--socks-max-sessions")
+        .default_value(0)
+        .scan<'i', int>()
+        .help(
+            "Limit of simultaneous SOCKS5 sessions. 0 (default) derives it "
+            "from the file descriptor limit of the process");
     args.add_argument("--socks-route-table")
         .default_value(1080)
         .scan<'i', int>()
@@ -752,6 +774,15 @@ int main(int argc, char* argv[]) {
 
     const auto socks_listen = args.get<std::string>("--socks-listen");
     const bool socks_enabled = !socks_listen.empty();
+    const int socks_max_sessions_arg = args.get<int>("--socks-max-sessions");
+    const std::size_t max_socks_sessions =
+        socks_max_sessions_arg > 0
+            ? static_cast<std::size_t>(socks_max_sessions_arg)
+            : DefaultMaxSocksSessions(fd_limit);
+    if (socks_enabled) {
+      SPDLOG_INFO("SOCKS5 session limit: {} (fd limit {})", max_socks_sessions,
+          fd_limit);
+    }
     const bool disable_routing =
         args.get<bool>("--disable-routing") || socks_enabled;
     const auto socks_route_table = args.get<int>("--socks-route-table");
@@ -919,7 +950,8 @@ int main(int argc, char* argv[]) {
           fptn::socks::Socks5Server::Config{
               .listen_address = socks_address,
               .listen_port = socks_port,
-              .tun_interface_name = tun_interface_name});
+              .tun_interface_name = tun_interface_name,
+              .max_sessions = max_socks_sessions});
       if (!socks_server->Listen()) {
         SPDLOG_ERROR("Failed to open the SOCKS5 port");
         return EXIT_FAILURE;
