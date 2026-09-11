@@ -1,0 +1,299 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: fa\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Censorship-resistant VPN"
+msgstr "VPN مقاوم در برابر سانسور"
+
+msgid "Getting started"
+msgstr "شروع کار"
+
+msgid "Open %s in Telegram and copy the access token."
+msgstr "%s را در تلگرام باز کنید و توکن دسترسی را کپی کنید."
+
+msgid "Paste it into the \"Access token\" field below and press \"Save & Apply\"."
+msgstr "آن را در فیلد «توکن دسترسی» در پایین قرار دهید و روی «ذخیره و اعمال» بزنید."
+
+msgid "Enabled"
+msgstr "فعال"
+
+msgid "Service"
+msgstr "سرویس"
+
+msgid "Version"
+msgstr "نسخه"
+
+msgid "version %s is available"
+msgstr "نسخه %s در دسترس است"
+
+msgid "Diagnostics"
+msgstr "عیب‌یابی"
+
+msgid "Status"
+msgstr "وضعیت"
+
+msgid "Settings"
+msgstr "تنظیمات"
+
+msgid "Routing"
+msgstr "مسیریابی"
+
+msgid "Log"
+msgstr "گزارش"
+
+msgid "No messages yet"
+msgstr "هنوز پیامی نیست"
+
+msgid "Disabled"
+msgstr "غیرفعال"
+
+msgid "Starting…"
+msgstr "در حال راه‌اندازی…"
+
+msgid "Connecting…"
+msgstr "در حال اتصال…"
+
+msgid "Connected"
+msgstr "متصل"
+
+msgid "Connection"
+msgstr "اتصال"
+
+msgid "Selected server"
+msgstr "سرور انتخاب‌شده"
+
+msgid "Auto"
+msgstr "خودکار"
+
+msgid "Split tunneling"
+msgstr "تونل تقسیم‌شده"
+
+msgid "off"
+msgstr "خاموش"
+
+msgid "Tunnel interface"
+msgstr "رابط تونل"
+
+msgid "PID"
+msgstr "شناسه فرایند"
+
+msgid "Received"
+msgstr "دریافت‌شده"
+
+msgid "Sent"
+msgstr "ارسال‌شده"
+
+msgid "no token configured"
+msgstr "توکنی تنظیم نشده است"
+
+msgid "the router has no default route — check the WAN connection"
+msgstr "روتر مسیر پیش‌فرض ندارد — اتصال WAN را بررسی کنید"
+
+msgid "this access token cannot be read — copy it again from %s"
+msgstr "این توکن دسترسی خوانده نمی‌شود — آن را دوباره از %s کپی کنید"
+
+msgid "the servers reject this access token — it has expired or is invalid, get a fresh one from %s"
+msgstr "سرورها این توکن دسترسی را رد می‌کنند — منقضی شده یا نامعتبر است، یک توکن جدید از %s بگیرید"
+
+msgid "the router cannot resolve server names — check its own DNS settings under Network → DNS"
+msgstr "روتر نمی‌تواند نام سرورها را تبدیل کند — تنظیمات DNS خود روتر را در بخش شبکه ← DNS بررسی کنید"
+
+msgid "the server named in \"Preferred server\" is not in this token — clear the field or choose another one"
+msgstr "سروری که در «سرور ترجیحی» نام برده شده در این توکن نیست — فیلد را خالی کنید یا سرور دیگری انتخاب کنید"
+
+msgid "no server could be reached — try another bypass blocking method, or get a fresh token from %s"
+msgstr "به هیچ سروری نمی‌توان متصل شد — روش دیگری برای دور زدن مسدودیت امتحان کنید یا یک توکن جدید از %s بگیرید"
+
+msgid "Access token"
+msgstr "توکن دسترسی"
+
+msgid "Token issued by %s in Telegram. It carries the server list, so get a new one when the current token expires."
+msgstr "توکنی که %s در تلگرام صادر می‌کند. فهرست سرورها در آن است، پس وقتی توکن فعلی منقضی شد، توکن جدیدی بگیرید."
+
+msgid "Preferred server"
+msgstr "سرور ترجیحی"
+
+msgid "The token is damaged or not copied completely — copy it again from @fptn_bot"
+msgstr "توکن خراب است یا کامل کپی نشده — آن را دوباره از @fptn_bot کپی کنید"
+
+msgid "Server from the access token to connect to. \"Auto\" logs in to every server at once and keeps the one that answers first."
+msgstr "سروری از توکن که باید به آن وصل شد. «خودکار» یعنی کلاینت هم‌زمان به همه سرورها وارد می‌شود و سروری را نگه می‌دارد که زودتر پاسخ دهد."
+
+msgid "Connection strategy"
+msgstr "راهبرد اتصال"
+
+msgid "How many tunnels are kept open at the same time. Every tunnel is replaced by a new one each 10 minutes, and traffic is spread across them, so no single connection carries the whole session."
+msgstr "چند تونل هم‌زمان باز نگه داشته شود. هر تونل هر 10 دقیقه با تونل تازه‌ای جایگزین می‌شود و ترافیک بین آن‌ها پخش می‌شود، بنابراین هیچ اتصالی کل نشست را حمل نمی‌کند."
+
+msgid "Rolling tunnel"
+msgstr "تونل چرخشی"
+
+msgid "Dual rolling tunnel"
+msgstr "تونل چرخشی دوگانه"
+
+msgid "Triple rolling tunnel"
+msgstr "تونل چرخشی سه‌گانه"
+
+msgid "Bypass blocking method"
+msgstr "روش دور زدن مسدودیت"
+
+msgid "How the connection is disguised. Traffic masking hides it inside an ordinary TLS stream; the browser options copy the TLS handshake of that browser, so the connection looks like a visit to the domain set below."
+msgstr "اتصال چگونه پنهان می‌شود. پنهان‌سازی ترافیک آن را درون یک جریان عادی TLS مخفی می‌کند؛ گزینه‌های مرورگر، دست‌دهی TLS همان مرورگر را کپی می‌کنند تا اتصال مانند بازدید از دامنه‌ای به نظر برسد که در پایین تنظیم شده است."
+
+msgid "Traffic masking (obfuscation)"
+msgstr "پنهان‌سازی ترافیک (مبهم‌سازی)"
+
+msgid "Tunnel MTU"
+msgstr "MTU تونل"
+
+msgid "Largest packet the tunnel carries. 1420 fits almost every provider; lower it if big packets get stuck while small ones pass. Allowed range is 576 to 65535."
+msgstr "بزرگ‌ترین بسته‌ای که تونل منتقل می‌کند. مقدار 1420 تقریباً برای همه ارائه‌دهندگان مناسب است؛ اگر بسته‌های بزرگ گیر می‌کنند ولی بسته‌های کوچک عبور می‌کنند، آن را کم کنید. بازه مجاز از 576 تا 65535 است."
+
+msgid "Fake domain to bypass blocking"
+msgstr "دامنه جعلی برای دور زدن مسدودیت"
+
+msgid "Domain name sent in the TLS handshake instead of the real server address. Empty means rutube.ru. Pick a popular site that is not blocked where you are."
+msgstr "نام دامنه‌ای که به‌جای نشانی واقعی سرور در دست‌دهی TLS فرستاده می‌شود. خالی یعنی rutube.ru. یک سایت پربازدید انتخاب کنید که در منطقه شما مسدود نیست."
+
+msgid "Use FPTN DNS"
+msgstr "استفاده از DNS FPTN"
+
+msgid "Send DNS queries through the tunnel. When off, FPTN does not touch the router DNS settings at all."
+msgstr "درخواست‌های DNS از طریق تونل فرستاده شوند. اگر خاموش باشد، FPTN اصلاً به تنظیمات DNS روتر دست نمی‌زند."
+
+msgid "Enable split tunneling"
+msgstr "فعال کردن تونل تقسیم‌شده"
+
+msgid "When enabled, you can configure which sites use VPN and which go directly."
+msgstr "پس از فعال‌سازی، می‌توانید تنظیم کنید کدام سایت‌ها از VPN استفاده کنند و کدام مستقیماً متصل شوند."
+
+msgid "Split tunnel mode"
+msgstr "حالت تونل تقسیم‌شده"
+
+msgid "Defines traffic routing strategy for split tunneling."
+msgstr "استراتژی مسیریابی ترافیک را برای تونل تقسیم‌شده تعریف می‌کند."
+
+msgid "Exclude"
+msgstr "مستثنی کردن"
+
+msgid "Include"
+msgstr "شامل کردن"
+
+msgid "Domains to bypass VPN"
+msgstr "دامنه‌هایی که VPN را دور بزنند"
+
+msgid "List domains that should bypass VPN tunnel. These domains will go directly, all other traffic uses VPN"
+msgstr "فهرست دامنه‌هایی که باید تونل VPN را دور بزنند. این دامنه‌ها مستقیماً متصل می‌شوند، بقیه ترافیک از VPN استفاده می‌کند"
+
+msgid "Domains to route through VPN"
+msgstr "دامنه‌هایی که از VPN عبور کنند"
+
+msgid "List domains that should use VPN tunnel. Only these domains will go through VPN, all other traffic bypasses VPN"
+msgstr "فهرست دامنه‌هایی که باید از تونل VPN استفاده کنند. فقط این دامنه‌ها از VPN عبور می‌کنند، بقیه ترافیک VPN را دور می‌زند"
+
+msgid "Blacklist domains"
+msgstr "دامنه‌های لیست سیاه"
+
+msgid "Completely block access to the main domain AND all its subdomains. Format: example.com (one per line)"
+msgstr "مسدودیت کامل دسترسی به دامنه اصلی و همه زیردامنه‌های آن. قالب: example.com (هر خط یک مورد)"
+
+msgid "Exclude tunnel networks"
+msgstr "مستثنی کردن شبکه‌های تونل"
+
+msgid "Networks that always bypass VPN tunnel. Traffic to these networks goes directly, never through VPN"
+msgstr "شبکه‌هایی که همیشه تونل VPN را دور می‌زنند. ترافیک این شبکه‌ها مستقیماً ارسال می‌شود، هرگز از VPN عبور نمی‌کند"
+
+msgid "Include tunnel networks"
+msgstr "شامل کردن شبکه‌های تونل"
+
+msgid "Networks that always use VPN tunnel. Traffic to these networks always goes through VPN"
+msgstr "شبکه‌هایی که همیشه از تونل VPN استفاده می‌کنند. ترافیک این شبکه‌ها همیشه از VPN عبور می‌کند"
+
+msgid "There are unsaved changes. The checks below look at the applied configuration — press \"Save & Apply\" first."
+msgstr "تغییرات ذخیره‌نشده وجود دارد. بررسی‌های زیر پیکربندی اعمال‌شده را می‌سنجند — ابتدا روی «ذخیره و اعمال» بزنید."
+
+msgid "%d check(s) failed"
+msgstr "%d بررسی ناموفق بود"
+
+msgid "Everything looks fine"
+msgstr "همه چیز درست است"
+
+msgid "Close"
+msgstr "بستن"
+
+msgid "Access token is set"
+msgstr "توکن دسترسی تنظیم شده است"
+
+msgid "configured"
+msgstr "تنظیم شده"
+
+msgid "empty, the client refuses to start"
+msgstr "خالی است، کلاینت اجرا نمی‌شود"
+
+msgid "Client is enabled"
+msgstr "کلاینت فعال است"
+
+msgid "enabled"
+msgstr "فعال"
+
+msgid "disabled in configuration"
+msgstr "در پیکربندی غیرفعال است"
+
+msgid "VPN process is running"
+msgstr "فرایند VPN در حال اجراست"
+
+msgid "running"
+msgstr "در حال اجرا"
+
+msgid "stopped"
+msgstr "متوقف"
+
+msgid "Tunnel '%s' is up"
+msgstr "تونل «%s» فعال است"
+
+msgid "up, MTU %s"
+msgstr "فعال، MTU %s"
+
+msgid "unknown"
+msgstr "نامشخص"
+
+msgid "interface does not exist"
+msgstr "رابط وجود ندارد"
+
+msgid "Tunnel has an IPv4 address"
+msgstr "تونل نشانی IPv4 دارد"
+
+msgid "no address assigned"
+msgstr "نشانی‌ای اختصاص داده نشده است"
+
+msgid "Default route goes through the tunnel"
+msgstr "مسیر پیش‌فرض از تونل می‌گذرد"
+
+msgid "no default route at all"
+msgstr "اصلاً مسیر پیش‌فرضی وجود ندارد"
+
+msgid "Firewall zone 'fptn' exists"
+msgstr "ناحیه فایروال «fptn» وجود دارد"
+
+msgid "present, LAN clients are masqueraded"
+msgstr "وجود دارد، نشانی کلاینت‌های شبکه محلی جایگزین می‌شود"
+
+msgid "missing, LAN clients will not reach the internet"
+msgstr "وجود ندارد، کلاینت‌های شبکه محلی به اینترنت دسترسی نخواهند داشت"
+
+msgid "The internet answers through the tunnel"
+msgstr "اینترنت از طریق تونل پاسخ می‌دهد"
+
+msgid "8.8.8.8 replies"
+msgstr "8.8.8.8 پاسخ می‌دهد"
+
+msgid "8.8.8.8 does not reply, traffic does not pass the tunnel"
+msgstr "8.8.8.8 پاسخ نمی‌دهد، ترافیک از تونل عبور نمی‌کند"
+
+msgid "The tunnel carries traffic in both directions"
+msgstr "تونل ترافیک را در هر دو جهت منتقل می‌کند"
+
+msgid "sent %s, received %s"
+msgstr "ارسال‌شده %s، دریافت‌شده %s"

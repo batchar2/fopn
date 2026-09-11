@@ -145,7 +145,15 @@ Ask the router what it needs:
 apk --print-arch
 ```
 
-On 24.10 use `opkg print-architecture` instead.
+On 24.10:
+
+```bash
+opkg print-architecture
+```
+
+It prints several lines; the package architecture is the one with the largest number, for example `arch aarch64_cortex-a53 10`.
+
+`aarch64_generic`, `aarch64_cortex-a53` and `aarch64_cortex-a72` are different package architectures even though all of them are 64-bit ARM. The package manager refuses a package built for another one — opkg reports `incompatible with the architectures configured` — so the name has to match exactly.
 
 Both the branch and the architecture are in the file name, so take the matching one from [Releases](https://github.com/batchar2/fptn/releases) — for example `fptn-client-0.4.4-openwrt-25.12.x-aarch64_generic.apk`. Building it yourself is described in *Building for OpenWrt*.
 
@@ -156,7 +164,7 @@ scp fptn-client-*.apk root@192.168.1.1:/tmp/
 ```
 
 ```bash
-apk add --allow-untrusted /tmp/fptn-client-*.apk
+apk update && apk add --allow-untrusted /tmp/fptn-client-*.apk
 ```
 
 On 24.10:

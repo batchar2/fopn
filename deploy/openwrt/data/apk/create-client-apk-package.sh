@@ -43,6 +43,11 @@ sed -i "s/@FPTN_VERSION@/${VERSION}/" "$CLIENT_TMP_DIR/www/luci-static/resources
 find "$CLIENT_TMP_DIR/usr/share/luci" "$CLIENT_TMP_DIR/usr/share/rpcd" "$CLIENT_TMP_DIR/www" -type d -exec chmod 755 {} +
 find "$CLIENT_TMP_DIR/usr/share/luci" "$CLIENT_TMP_DIR/usr/share/rpcd" "$CLIENT_TMP_DIR/www" -type f -exec chmod 644 {} +
 
+mkdir -p "$CLIENT_TMP_DIR/usr/lib/lua/luci/i18n"
+for po in "$SHARED_DIR"/po/*/fptn.po; do
+    po2lmo "$po" "$CLIENT_TMP_DIR/usr/lib/lua/luci/i18n/fptn.$(basename "$(dirname "$po")").lmo"
+done
+
 "$APK_TOOL" mkpkg \
     --info "name:fptn-client" \
     --info "version:${VERSION}-r1" \

@@ -128,10 +128,6 @@ start_service() {
 	fi
 	echo "$gateway" > "$GATEWAY_CACHE"
 
-	local tun
-	config_get tun config tun_interface_name tun0
-	ip link del "$tun" 2>/dev/null
-
 	procd_open_instance
 	procd_set_param command "$PROG" --access-token "$access_token"
 	procd_append_param command --gateway-ip "$gateway"
@@ -170,10 +166,6 @@ start_service() {
 stop_service() {
 	config_load fptn
 	restore_dns
-
-	local tun
-	config_get tun config tun_interface_name tun0
-	ip link del "$tun" 2>/dev/null
 }
 
 service_triggers() {

@@ -1,0 +1,296 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8"
+
+msgid "Censorship-resistant VPN"
+msgstr ""
+
+msgid "Getting started"
+msgstr ""
+
+msgid "Open %s in Telegram and copy the access token."
+msgstr ""
+
+msgid "Paste it into the \"Access token\" field below and press \"Save & Apply\"."
+msgstr ""
+
+msgid "Enabled"
+msgstr ""
+
+msgid "Service"
+msgstr ""
+
+msgid "Version"
+msgstr ""
+
+msgid "version %s is available"
+msgstr ""
+
+msgid "Diagnostics"
+msgstr ""
+
+msgid "Status"
+msgstr ""
+
+msgid "Settings"
+msgstr ""
+
+msgid "Routing"
+msgstr ""
+
+msgid "Log"
+msgstr ""
+
+msgid "No messages yet"
+msgstr ""
+
+msgid "Disabled"
+msgstr ""
+
+msgid "Starting…"
+msgstr ""
+
+msgid "Connecting…"
+msgstr ""
+
+msgid "Connected"
+msgstr ""
+
+msgid "Connection"
+msgstr ""
+
+msgid "Selected server"
+msgstr ""
+
+msgid "Auto"
+msgstr ""
+
+msgid "Split tunneling"
+msgstr ""
+
+msgid "off"
+msgstr ""
+
+msgid "Tunnel interface"
+msgstr ""
+
+msgid "PID"
+msgstr ""
+
+msgid "Received"
+msgstr ""
+
+msgid "Sent"
+msgstr ""
+
+msgid "no token configured"
+msgstr ""
+
+msgid "the router has no default route — check the WAN connection"
+msgstr ""
+
+msgid "this access token cannot be read — copy it again from %s"
+msgstr ""
+
+msgid "the servers reject this access token — it has expired or is invalid, get a fresh one from %s"
+msgstr ""
+
+msgid "the router cannot resolve server names — check its own DNS settings under Network → DNS"
+msgstr ""
+
+msgid "the server named in \"Preferred server\" is not in this token — clear the field or choose another one"
+msgstr ""
+
+msgid "no server could be reached — try another bypass blocking method, or get a fresh token from %s"
+msgstr ""
+
+msgid "Access token"
+msgstr ""
+
+msgid "Token issued by %s in Telegram. It carries the server list, so get a new one when the current token expires."
+msgstr ""
+
+msgid "Preferred server"
+msgstr ""
+
+msgid "The token is damaged or not copied completely — copy it again from @fptn_bot"
+msgstr ""
+
+msgid "Server from the access token to connect to. \"Auto\" logs in to every server at once and keeps the one that answers first."
+msgstr ""
+
+msgid "Connection strategy"
+msgstr ""
+
+msgid "How many tunnels are kept open at the same time. Every tunnel is replaced by a new one each 10 minutes, and traffic is spread across them, so no single connection carries the whole session."
+msgstr ""
+
+msgid "Rolling tunnel"
+msgstr ""
+
+msgid "Dual rolling tunnel"
+msgstr ""
+
+msgid "Triple rolling tunnel"
+msgstr ""
+
+msgid "Bypass blocking method"
+msgstr ""
+
+msgid "How the connection is disguised. Traffic masking hides it inside an ordinary TLS stream; the browser options copy the TLS handshake of that browser, so the connection looks like a visit to the domain set below."
+msgstr ""
+
+msgid "Traffic masking (obfuscation)"
+msgstr ""
+
+msgid "Tunnel MTU"
+msgstr ""
+
+msgid "Largest packet the tunnel carries. 1420 fits almost every provider; lower it if big packets get stuck while small ones pass. Allowed range is 576 to 65535."
+msgstr ""
+
+msgid "Fake domain to bypass blocking"
+msgstr ""
+
+msgid "Domain name sent in the TLS handshake instead of the real server address. Empty means rutube.ru. Pick a popular site that is not blocked where you are."
+msgstr ""
+
+msgid "Use FPTN DNS"
+msgstr ""
+
+msgid "Send DNS queries through the tunnel. When off, FPTN does not touch the router DNS settings at all."
+msgstr ""
+
+msgid "Enable split tunneling"
+msgstr ""
+
+msgid "When enabled, you can configure which sites use VPN and which go directly."
+msgstr ""
+
+msgid "Split tunnel mode"
+msgstr ""
+
+msgid "Defines traffic routing strategy for split tunneling."
+msgstr ""
+
+msgid "Exclude"
+msgstr ""
+
+msgid "Include"
+msgstr ""
+
+msgid "Domains to bypass VPN"
+msgstr ""
+
+msgid "List domains that should bypass VPN tunnel. These domains will go directly, all other traffic uses VPN"
+msgstr ""
+
+msgid "Domains to route through VPN"
+msgstr ""
+
+msgid "List domains that should use VPN tunnel. Only these domains will go through VPN, all other traffic bypasses VPN"
+msgstr ""
+
+msgid "Blacklist domains"
+msgstr ""
+
+msgid "Completely block access to the main domain AND all its subdomains. Format: example.com (one per line)"
+msgstr ""
+
+msgid "Exclude tunnel networks"
+msgstr ""
+
+msgid "Networks that always bypass VPN tunnel. Traffic to these networks goes directly, never through VPN"
+msgstr ""
+
+msgid "Include tunnel networks"
+msgstr ""
+
+msgid "Networks that always use VPN tunnel. Traffic to these networks always goes through VPN"
+msgstr ""
+
+msgid "There are unsaved changes. The checks below look at the applied configuration — press \"Save & Apply\" first."
+msgstr ""
+
+msgid "%d check(s) failed"
+msgstr ""
+
+msgid "Everything looks fine"
+msgstr ""
+
+msgid "Close"
+msgstr ""
+
+msgid "Access token is set"
+msgstr ""
+
+msgid "configured"
+msgstr ""
+
+msgid "empty, the client refuses to start"
+msgstr ""
+
+msgid "Client is enabled"
+msgstr ""
+
+msgid "enabled"
+msgstr ""
+
+msgid "disabled in configuration"
+msgstr ""
+
+msgid "VPN process is running"
+msgstr ""
+
+msgid "running"
+msgstr ""
+
+msgid "stopped"
+msgstr ""
+
+msgid "Tunnel '%s' is up"
+msgstr ""
+
+msgid "up, MTU %s"
+msgstr ""
+
+msgid "unknown"
+msgstr ""
+
+msgid "interface does not exist"
+msgstr ""
+
+msgid "Tunnel has an IPv4 address"
+msgstr ""
+
+msgid "no address assigned"
+msgstr ""
+
+msgid "Default route goes through the tunnel"
+msgstr ""
+
+msgid "no default route at all"
+msgstr ""
+
+msgid "Firewall zone 'fptn' exists"
+msgstr ""
+
+msgid "present, LAN clients are masqueraded"
+msgstr ""
+
+msgid "missing, LAN clients will not reach the internet"
+msgstr ""
+
+msgid "The internet answers through the tunnel"
+msgstr ""
+
+msgid "8.8.8.8 replies"
+msgstr ""
+
+msgid "8.8.8.8 does not reply, traffic does not pass the tunnel"
+msgstr ""
+
+msgid "The tunnel carries traffic in both directions"
+msgstr ""
+
+msgid "sent %s, received %s"
+msgstr ""

@@ -1,0 +1,299 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: ru\n"
+"Plural-Forms: nplurals=3; plural=n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2;\n"
+
+msgid "Censorship-resistant VPN"
+msgstr "VPN, устойчивый к блокировкам"
+
+msgid "Getting started"
+msgstr "С чего начать"
+
+msgid "Open %s in Telegram and copy the access token."
+msgstr "Откройте %s в Telegram и скопируйте токен доступа."
+
+msgid "Paste it into the \"Access token\" field below and press \"Save & Apply\"."
+msgstr "Вставьте его в поле «Токен доступа» ниже и нажмите «Сохранить и применить»."
+
+msgid "Enabled"
+msgstr "Включено"
+
+msgid "Service"
+msgstr "Служба"
+
+msgid "Version"
+msgstr "Версия"
+
+msgid "version %s is available"
+msgstr "доступна версия %s"
+
+msgid "Diagnostics"
+msgstr "Диагностика"
+
+msgid "Status"
+msgstr "Состояние"
+
+msgid "Settings"
+msgstr "Настройки"
+
+msgid "Routing"
+msgstr "Маршрутизация"
+
+msgid "Log"
+msgstr "Журнал"
+
+msgid "No messages yet"
+msgstr "Сообщений пока нет"
+
+msgid "Disabled"
+msgstr "Выключено"
+
+msgid "Starting…"
+msgstr "Запускается…"
+
+msgid "Connecting…"
+msgstr "Подключается…"
+
+msgid "Connected"
+msgstr "Подключено"
+
+msgid "Connection"
+msgstr "Подключение"
+
+msgid "Selected server"
+msgstr "Выбранный сервер"
+
+msgid "Auto"
+msgstr "Авто"
+
+msgid "Split tunneling"
+msgstr "Раздельное туннелирование"
+
+msgid "off"
+msgstr "выключено"
+
+msgid "Tunnel interface"
+msgstr "Интерфейс туннеля"
+
+msgid "PID"
+msgstr "ИД процесса"
+
+msgid "Received"
+msgstr "Получено"
+
+msgid "Sent"
+msgstr "Отправлено"
+
+msgid "no token configured"
+msgstr "токен не задан"
+
+msgid "the router has no default route — check the WAN connection"
+msgstr "у роутера нет маршрута по умолчанию — проверьте подключение WAN"
+
+msgid "this access token cannot be read — copy it again from %s"
+msgstr "токен не читается — скопируйте его заново из %s"
+
+msgid "the servers reject this access token — it has expired or is invalid, get a fresh one from %s"
+msgstr "серверы отклоняют этот токен — он истек или недействителен, получите новый в %s"
+
+msgid "the router cannot resolve server names — check its own DNS settings under Network → DNS"
+msgstr "роутер не может разрешить имена серверов — проверьте его настройки DNS в разделе Сеть → DNS"
+
+msgid "the server named in \"Preferred server\" is not in this token — clear the field or choose another one"
+msgstr "сервера из поля «Предпочитаемый сервер» нет в этом токене — очистите поле или выберите другой"
+
+msgid "no server could be reached — try another bypass blocking method, or get a fresh token from %s"
+msgstr "ни один сервер не отвечает — попробуйте другой метод обхода блокировок или получите новый токен в %s"
+
+msgid "Access token"
+msgstr "Токен доступа"
+
+msgid "Token issued by %s in Telegram. It carries the server list, so get a new one when the current token expires."
+msgstr "Токен выдает %s в Telegram. В нем хранится список серверов, поэтому, когда срок его действия истечет, получите новый."
+
+msgid "Preferred server"
+msgstr "Предпочитаемый сервер"
+
+msgid "The token is damaged or not copied completely — copy it again from @fptn_bot"
+msgstr "Токен поврежден или скопирован не полностью — скопируйте его заново из @fptn_bot"
+
+msgid "Server from the access token to connect to. \"Auto\" logs in to every server at once and keeps the one that answers first."
+msgstr "Сервер из токена, к которому подключаться. «Авто» — клиент подключится ко всем серверам сразу и оставит тот, что ответит первым."
+
+msgid "Connection strategy"
+msgstr "Стратегия подключения"
+
+msgid "How many tunnels are kept open at the same time. Every tunnel is replaced by a new one each 10 minutes, and traffic is spread across them, so no single connection carries the whole session."
+msgstr "Сколько туннелей держится открытыми одновременно. Каждый туннель раз в 10 минут заменяется новым, а трафик распределяется между ними, поэтому ни одно соединение не несет всю сессию целиком."
+
+msgid "Rolling tunnel"
+msgstr "Скользящий туннель"
+
+msgid "Dual rolling tunnel"
+msgstr "Двойной скользящий туннель"
+
+msgid "Triple rolling tunnel"
+msgstr "Тройной скользящий туннель"
+
+msgid "Bypass blocking method"
+msgstr "Метод обхода блокировок"
+
+msgid "How the connection is disguised. Traffic masking hides it inside an ordinary TLS stream; the browser options copy the TLS handshake of that browser, so the connection looks like a visit to the domain set below."
+msgstr "Как маскируется соединение. Маскировка трафика прячет его внутри обычного TLS-потока; варианты браузеров копируют TLS-рукопожатие этого браузера, и соединение выглядит как посещение домена, указанного ниже."
+
+msgid "Traffic masking (obfuscation)"
+msgstr "Маскировка трафика (обфускация)"
+
+msgid "Tunnel MTU"
+msgstr "MTU туннеля"
+
+msgid "Largest packet the tunnel carries. 1420 fits almost every provider; lower it if big packets get stuck while small ones pass. Allowed range is 576 to 65535."
+msgstr "Наибольший пакет, который пропускает туннель. 1420 подходит почти любому провайдеру; уменьшите, если крупные пакеты застревают, а мелкие проходят. Допустимый диапазон — от 576 до 65535."
+
+msgid "Fake domain to bypass blocking"
+msgstr "Фейковый домен для обхода блокировок"
+
+msgid "Domain name sent in the TLS handshake instead of the real server address. Empty means rutube.ru. Pick a popular site that is not blocked where you are."
+msgstr "Домен, который отправляется в TLS-рукопожатии вместо настоящего адреса сервера. Пустое значение означает rutube.ru. Выберите популярный сайт, который у вас не заблокирован."
+
+msgid "Use FPTN DNS"
+msgstr "Использовать DNS FPTN"
+
+msgid "Send DNS queries through the tunnel. When off, FPTN does not touch the router DNS settings at all."
+msgstr "Отправлять DNS-запросы через туннель. Если выключено, FPTN вообще не трогает настройки DNS роутера."
+
+msgid "Enable split tunneling"
+msgstr "Раздельное туннелирование"
+
+msgid "When enabled, you can configure which sites use VPN and which go directly."
+msgstr "Когда включено, вы можете настроить, какие сайты используют VPN, а какие идут напрямую."
+
+msgid "Split tunnel mode"
+msgstr "Режим раздельного туннеля"
+
+msgid "Defines traffic routing strategy for split tunneling."
+msgstr "Определяет стратегию маршрутизации трафика для раздельного туннелирования."
+
+msgid "Exclude"
+msgstr "Исключить"
+
+msgid "Include"
+msgstr "Включить"
+
+msgid "Domains to bypass VPN"
+msgstr "Домены для обхода VPN"
+
+msgid "List domains that should bypass VPN tunnel. These domains will go directly, all other traffic uses VPN"
+msgstr "Список доменов, которые не пойдут через VPN-туннель. Эти домены будут идти напрямую, весь остальной трафик пойдет в VPN"
+
+msgid "Domains to route through VPN"
+msgstr "Домены для маршрутизации через VPN"
+
+msgid "List domains that should use VPN tunnel. Only these domains will go through VPN, all other traffic bypasses VPN"
+msgstr "Список доменов, которые должны использовать VPN-туннель. Только эти домены будут проходить через VPN, весь остальной трафик мимо VPN"
+
+msgid "Blacklist domains"
+msgstr "Черный список доменов"
+
+msgid "Completely block access to the main domain AND all its subdomains. Format: example.com (one per line)"
+msgstr "Полностью блокировать доступ к основному домену и всем его поддоменам. Формат: example.com (по одному в строке)"
+
+msgid "Exclude tunnel networks"
+msgstr "Исключить сети из туннеля"
+
+msgid "Networks that always bypass VPN tunnel. Traffic to these networks goes directly, never through VPN"
+msgstr "Сети, которые всегда обходят VPN-туннель. Трафик к этим сетям идет напрямую, никогда через VPN"
+
+msgid "Include tunnel networks"
+msgstr "Включить сети в туннель"
+
+msgid "Networks that always use VPN tunnel. Traffic to these networks always goes through VPN"
+msgstr "Сети, которые всегда используют VPN-туннель. Трафик к этим сетям всегда идет через VPN"
+
+msgid "There are unsaved changes. The checks below look at the applied configuration — press \"Save & Apply\" first."
+msgstr "Есть несохраненные изменения. Проверки ниже смотрят на примененную конфигурацию — сначала нажмите «Сохранить и применить»."
+
+msgid "%d check(s) failed"
+msgstr "Проверок не пройдено: %d"
+
+msgid "Everything looks fine"
+msgstr "Все в порядке"
+
+msgid "Close"
+msgstr "Закрыть"
+
+msgid "Access token is set"
+msgstr "Токен доступа задан"
+
+msgid "configured"
+msgstr "задан"
+
+msgid "empty, the client refuses to start"
+msgstr "пусто, клиент не запустится"
+
+msgid "Client is enabled"
+msgstr "Клиент включен"
+
+msgid "enabled"
+msgstr "включено"
+
+msgid "disabled in configuration"
+msgstr "выключено в настройках"
+
+msgid "VPN process is running"
+msgstr "Процесс VPN запущен"
+
+msgid "running"
+msgstr "запущен"
+
+msgid "stopped"
+msgstr "остановлен"
+
+msgid "Tunnel '%s' is up"
+msgstr "Туннель «%s» поднят"
+
+msgid "up, MTU %s"
+msgstr "поднят, MTU %s"
+
+msgid "unknown"
+msgstr "неизвестно"
+
+msgid "interface does not exist"
+msgstr "интерфейса нет"
+
+msgid "Tunnel has an IPv4 address"
+msgstr "У туннеля есть адрес IPv4"
+
+msgid "no address assigned"
+msgstr "адрес не назначен"
+
+msgid "Default route goes through the tunnel"
+msgstr "Маршрут по умолчанию идет через туннель"
+
+msgid "no default route at all"
+msgstr "маршрута по умолчанию нет вообще"
+
+msgid "Firewall zone 'fptn' exists"
+msgstr "Зона межсетевого экрана «fptn» существует"
+
+msgid "present, LAN clients are masqueraded"
+msgstr "есть, адреса клиентов локальной сети подменяются"
+
+msgid "missing, LAN clients will not reach the internet"
+msgstr "нет, клиенты локальной сети не выйдут в интернет"
+
+msgid "The internet answers through the tunnel"
+msgstr "Интернет отвечает через туннель"
+
+msgid "8.8.8.8 replies"
+msgstr "8.8.8.8 отвечает"
+
+msgid "8.8.8.8 does not reply, traffic does not pass the tunnel"
+msgstr "8.8.8.8 не отвечает, трафик не проходит через туннель"
+
+msgid "The tunnel carries traffic in both directions"
+msgstr "Туннель передает трафик в обе стороны"
+
+msgid "sent %s, received %s"
+msgstr "отправлено %s, получено %s"

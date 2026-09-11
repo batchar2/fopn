@@ -69,6 +69,18 @@ RUN conan install . \
       -o with_gui_client=False \
       -o openwrt=True
 
+RUN mkdir -p /tmp/po2lmo/lib /tmp/po2lmo/contrib && cd /tmp/po2lmo \
+    && for f in Makefile po2lmo.c lib/lmo.c lib/lmo.h lib/plural_formula.y contrib/lemon.c contrib/lempar.c; do \
+         wget -q -O "$f" "https://raw.githubusercontent.com/openwrt/luci/openwrt-24.10/modules/luci-base/src/$f"; \
+       done \
+    && make po2lmo \
+    && cp po2lmo /usr/local/bin/po2lmo \
+    && rm -rf /tmp/po2lmo
+
+RUN mkdir -p /app/deploy/openwrt/data/luci/www/luci-static/resources/fptn \
+    && wget -q -O /app/deploy/openwrt/data/luci/www/luci-static/resources/fptn/brotli.js \
+         "https://raw.githubusercontent.com/google/brotli/v1.2.0/js/decode.min.js"
+
 COPY . /app
 
 RUN find /app/deploy/openwrt -type f -exec sed -i 's/\r$//' {} + \

@@ -149,7 +149,15 @@ FPTN — это VPN-технология, созданная с нуля для 
 apk --print-arch
 ```
 
-На 24.10 вместо этого `opkg print-architecture`.
+На 24.10:
+
+```bash
+opkg print-architecture
+```
+
+Команда выводит несколько строк, архитектура пакетов — та, у которой самое большое число, например `arch aarch64_cortex-a53 10`.
+
+`aarch64_generic`, `aarch64_cortex-a53` и `aarch64_cortex-a72` — разные архитектуры пакетов, хотя все это 64-битный ARM. Пакет, собранный под другую, менеджер пакетов не поставит: opkg пишет `incompatible with the architectures configured`. Поэтому имя должно совпадать точно.
 
 И ветка, и архитектура есть в имени файла, поэтому возьмите подходящий из [релизов](https://github.com/batchar2/fptn/releases) — например, `fptn-client-0.4.4-openwrt-25.12.x-aarch64_generic.apk`. Как собрать пакет самому, описано в разделе *Сборка под OpenWrt*.
 
@@ -160,7 +168,7 @@ scp fptn-client-*.apk root@192.168.1.1:/tmp/
 ```
 
 ```bash
-apk add --allow-untrusted /tmp/fptn-client-*.apk
+apk update && apk add --allow-untrusted /tmp/fptn-client-*.apk
 ```
 
 На 24.10:
