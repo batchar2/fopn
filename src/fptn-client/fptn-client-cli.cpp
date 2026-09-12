@@ -323,6 +323,33 @@ std::vector<ServerInfo> ExcludeServers(
   return kept;
 }
 
+// The latency limit applied unless --max-ping says otherwise. It is a ceiling,
+// not a target: the probe opens a TLS connection and downloads 100 KB, so even
+// a healthy distant server reads as hundreds of milliseconds, and a busy one
+// as a second or two. Five seconds is the point past which the tunnel is
+// unusable rather than merely slow - low enough to leave a dying server,
+// high enough not to chase normal jitter. 0 turns the check off.
+constexpr int kDefaultMaxPingMs = 5000;
+
+// How long a single probe is given to answer. Past this the server counts as
+// dead for that round, so it also sets how long a sweep can stall on a node
+// that accepts the connection and then says nothing.
+constexpr int kProbeTimeoutSec = 5;
+
+// How often the whole pool is re-measured, and how much better another server
+// must be before the tunnel moves to it. sing-box sweeps every three minutes
+// and switches on 50 ms, because switching an outbound there costs nothing.
+// Here it costs a second of silence and a fresh login against a server that
+// counts sessions per user, so the threshold is an order larger: the point is
+// to leave a server that has gone bad, not to chase the fastest one.
+constexpr std::chrono::seconds kDefaultProbeInterval{180};
+constexpr int kDefaultSwitchToleranceMs = 500;
+
+// A floor under how often the tunnel may move on latency alone. Without it a
+// pool with two servers a few hundred milliseconds apart would swap on every
+// sweep, and each swap is a second without traffic.
+constexpr std::chrono::minutes kMinAutoSwitchGap{10};
+
 // The login race returns whichever server answers first, which says nothing
 // about its speed: with a limit set the winner is measured, dropped if it is
 // over, and the race repeated. Three rounds, then the best of a bad lot.
@@ -350,7 +377,7 @@ std::optional<fptn::utils::speed_estimator::LoginResult> SelectServer(
       return result;
     }
 
-    const auto ms = fptn::utils::speed_estimator::GetDownloadTimeMs(
+    const auto ms = fptn::utils::speed_estimator::GetLatencyMs(
         result->server, sni, 5, result->server.md5_fingerprint,
         censorship_strategy);
     if (ms <= static_cast<std::uint64_t>(max_ping_ms)) {
@@ -380,7 +407,9 @@ std::optional<fptn::utils::speed_estimator::LoginResult> SelectServer(
 // a vanishing PID loses it for good. Now the watchdog simply stops the
 // tunnel: the main loop exits on its own, SOCKS and routes are torn down
 // properly, and procd brings the process back.
-// (ZeroBlock does not pass --max-ping, so no watchdog is created there.)
+// The limit is on by default (kDefaultMaxPingMs), so this runs unless the
+// pool holds a single server, the server is pinned by name, or --max-ping is
+// set to 0.
 // How many times the startup login race is retried before giving up, and how
 // long to wait between attempts.
 constexpr int kStartupLoginAttempts = 3;
@@ -395,11 +424,13 @@ class PoolMonitor final {
   PoolMonitor(std::shared_ptr<fptn::client::status::ServerRegistry> registry,
       std::string sni,
       fptn::protocol::https::CensorshipStrategy censorship_strategy,
-      std::chrono::seconds interval)
+      std::chrono::seconds interval,
+      std::function<void()> on_sweep = {})
       : registry_(std::move(registry)),
         sni_(std::move(sni)),
         censorship_strategy_(censorship_strategy),
-        interval_(interval) {
+        interval_(interval),
+        on_sweep_(std::move(on_sweep)) {
     thread_ = std::thread([this] { Run(); });
   }
 
@@ -420,18 +451,48 @@ class PoolMonitor final {
  private:
   void Run() {
     while (Wait(interval_)) {
-      const auto servers = registry_->Servers();
-      for (const auto& server : servers) {
-        if (!Running()) {
-          return;
-        }
-        const auto ms = fptn::utils::speed_estimator::GetDownloadTimeMs(
-            server, sni_, 5, server.md5_fingerprint, censorship_strategy_);
-        const std::uint32_t delay =
-            ms == UINT64_MAX ? 0 : static_cast<std::uint32_t>(ms);
-        registry_->RecordProbe(
-            server, delay, delay == 0 ? "probe failed" : "");
+      Sweep();
+      if (Running() && on_sweep_) {
+        on_sweep_();
       }
+    }
+  }
+
+  // Probed one after another, a pool of thirty-five servers with a few dead
+  // ones in it takes longer to sweep than the interval between sweeps: every
+  // node that does not answer costs the whole timeout. The race at startup
+  // has the same shape and solves it the same way.
+  void Sweep() {
+    const auto servers = registry_->Servers();
+    if (servers.empty()) {
+      return;
+    }
+    std::atomic<std::size_t> next{0};
+    const std::size_t workers = std::min<std::size_t>(
+        fptn::utils::speed_estimator::kMaxProbeConcurrency, servers.size());
+
+    std::vector<std::thread> pool;
+    pool.reserve(workers);
+    for (std::size_t worker = 0; worker < workers; ++worker) {
+      pool.emplace_back([this, &servers, &next] {
+        for (;;) {
+          const std::size_t index = next.fetch_add(1);
+          if (index >= servers.size() || !Running()) {
+            return;
+          }
+          const auto& server = servers[index];
+          const auto ms = fptn::utils::speed_estimator::GetLatencyMs(
+              server, sni_, kProbeTimeoutSec, server.md5_fingerprint,
+              censorship_strategy_);
+          const std::uint32_t delay =
+              ms == UINT64_MAX ? 0 : static_cast<std::uint32_t>(ms);
+          registry_->RecordProbe(
+              server, delay, delay == 0 ? "probe failed" : "");
+        }
+      });
+    }
+    for (auto& thread : pool) {
+      thread.join();
     }
   }
 
@@ -450,12 +511,31 @@ class PoolMonitor final {
   const std::string sni_;
   const fptn::protocol::https::CensorshipStrategy censorship_strategy_;
   const std::chrono::seconds interval_;
+  const std::function<void()> on_sweep_;
 
   std::mutex mutex_;
   std::condition_variable cv_;
   bool running_ = true;
   std::thread thread_;
 };
+
+// The fastest server that is currently answering, by the average of its
+// measurement window rather than the last reading - one probe lies often
+// enough that a decision made on it moves the tunnel for nothing.
+std::optional<std::pair<ServerInfo, std::uint32_t>> BestServer(
+    const fptn::client::status::ServerRegistry& registry) {
+  std::optional<std::pair<ServerInfo, std::uint32_t>> best;
+  for (const auto& server : registry.Servers()) {
+    const auto stats = registry.Stats(server);
+    if (!stats.alive || stats.average_ms == 0) {
+      continue;
+    }
+    if (!best || stats.average_ms < best->second) {
+      best = std::make_pair(server, stats.average_ms);
+    }
+  }
+  return best;
+}
 
 class LatencyWatchdog final {
  public:
@@ -489,7 +569,7 @@ class LatencyWatchdog final {
   void Run() {
     int over_limit = 0;
     while (Wait(std::chrono::seconds(60))) {
-      const auto ms = fptn::utils::speed_estimator::GetDownloadTimeMs(
+      const auto ms = fptn::utils::speed_estimator::GetLatencyMs(
           server_, sni_, 5, server_.md5_fingerprint, censorship_strategy_);
       if (registry_) {
         // UINT64_MAX means the server did not answer; in the registry a
@@ -679,10 +759,11 @@ int main(int argc, char* argv[]) {
             "Regular expression: servers whose name matches it are left out "
             "of the pool, e.g. 'Russia|Vietnam'");
     args.add_argument("--max-ping")
-        .default_value(0)
+        .default_value(kDefaultMaxPingMs)
         .help(
-            "Latency limit in milliseconds. A server over it is not picked, "
-            "and the one in use is replaced once it stays over the limit")
+            "Latency limit in milliseconds (default 5000, 0 disables the "
+            "check). A server over it is not picked, and the one in use is "
+            "replaced once it stays over the limit")
         .action([](const std::string& v) -> int {
           if (v.empty()) {
             return 0;
@@ -903,12 +984,21 @@ int main(int argc, char* argv[]) {
             "Token for the status API: requests must carry "
             "'Authorization: Bearer <token>'. Empty means no check");
     args.add_argument("--probe-interval")
-        .default_value(0)
+        .default_value(static_cast<int>(kDefaultProbeInterval.count()))
         .scan<'i', int>()
         .help(
             "Re-measure every server in the pool every N seconds, so the "
             "status API shows fresh latency instead of one reading taken at "
-            "startup. 0 (default) disables it");
+            "startup, and a server that recovers becomes a candidate again. "
+            "Default 180, 0 disables it");
+    args.add_argument("--switch-tolerance")
+        .default_value(kDefaultSwitchToleranceMs)
+        .scan<'i', int>()
+        .help(
+            "How much faster another server must be, in milliseconds, before "
+            "the tunnel moves to it on its own. Default 500, 0 disables "
+            "moving on latency alone - a server that stops answering is still "
+            "left");
 
     try {
       args.parse_args(ExpandConfigFile(argc, argv));
@@ -978,6 +1068,7 @@ int main(int argc, char* argv[]) {
     const auto status_listen = args.get<std::string>("--status-listen");
     const auto status_secret = args.get<std::string>("--status-secret");
     const auto probe_interval = args.get<int>("--probe-interval");
+    const auto switch_tolerance = args.get<int>("--switch-tolerance");
 
     std::uint32_t routing_mark = 0;
     {
@@ -1148,7 +1239,7 @@ int main(int argc, char* argv[]) {
                                        const ServerInfo& server,
                                        int timeout_ms) -> std::uint32_t {
         const int timeout_sec = std::max(1, timeout_ms / 1000);
-        const auto ms = fptn::utils::speed_estimator::GetDownloadTimeMs(server,
+        const auto ms = fptn::utils::speed_estimator::GetLatencyMs(server,
             sni, timeout_sec, server.md5_fingerprint, censorship_strategy);
         return ms == UINT64_MAX ? 0 : static_cast<std::uint32_t>(ms);
       });
@@ -1399,6 +1490,75 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<LatencyWatchdog> watchdog;
     std::mutex switch_mutex;
 
+    // Set the moment the user picks a server themselves. Their choice
+    // outranks a measurement: undoing it on the next sweep would read as the
+    // client fighting the dashboard.
+    std::atomic<bool> manually_pinned{false};
+    // Both written under switch_mutex.
+    auto last_switch = std::chrono::steady_clock::now();
+
+    // One implementation of "move the tunnel", used by the status API and by
+    // the sweep alike. Returns false and leaves the tunnel where it was if
+    // the new server does not answer or the login fails.
+    const auto switch_to = [&](const ServerInfo& server) -> bool {
+      const std::scoped_lock<std::mutex> lock(switch_mutex);
+
+      // The route manager excludes the address of the server it was
+      // started with, and that exclusion cannot be rewritten in place.
+      // Where another daemon owns the routes there is nothing to exclude.
+      if (route_manager) {
+        SPDLOG_WARN(
+            "Server switching needs --disable-routing: the route manager "
+            "pins the current server address");
+        return false;
+      }
+
+      if (fptn::client::status::ServerRegistry::KeyOf(server) ==
+          fptn::client::status::ServerRegistry::KeyOf(selected_server)) {
+        return true;  // already there
+      }
+
+      // A switch drops the current session before a new one exists: the
+      // server counts sessions per user and would refuse a second login.
+      // So make sure the new node answers at all first - otherwise a
+      // working tunnel would stall for the whole run of failed attempts.
+      const auto probe = fptn::utils::speed_estimator::GetLatencyMs(server,
+          sni, kProbeTimeoutSec, server.md5_fingerprint, censorship_strategy);
+      const std::uint32_t probe_ms =
+          probe == UINT64_MAX ? 0 : static_cast<std::uint32_t>(probe);
+      registry->RecordProbe(
+          server, probe_ms, probe_ms == 0 ? "unreachable" : "");
+      if (probe_ms == 0) {
+        SPDLOG_WARN("{} did not answer, staying on the current server",
+            fptn::client::status::ServerRegistry::DisplayName(server));
+        return false;
+      }
+
+      if (!vpn_client.SwitchClient(
+              [&]() { return make_client(server, "", 5); })) {
+        SPDLOG_ERROR("Could not switch the tunnel to {}",
+            fptn::client::status::ServerRegistry::DisplayName(server));
+        return false;
+      }
+
+      selected_server = server;
+      last_switch = std::chrono::steady_clock::now();
+      registry->SetActive(server);
+      SPDLOG_INFO("Switched to {}",
+          fptn::client::status::ServerRegistry::DisplayName(server));
+
+      // The watchdog watched the previous node - rebuild it for the new one.
+      // Safe from the sweep thread and from the API thread; the watchdog runs
+      // on its own, so joining it here is not joining ourselves.
+      if (watchdog) {
+        watchdog.reset();
+        watchdog = std::make_unique<LatencyWatchdog>(server, sni,
+            censorship_strategy, max_ping,
+            [&vpn_client]() { vpn_client.Stop(); }, registry);
+      }
+      return true;
+    };
+
     /* tunnel-facing callbacks: only now is there a tunnel to report on */
     if (status_server) {
       status_server->SetStatusProvider(
@@ -1428,72 +1588,80 @@ int main(int argc, char* argv[]) {
             {"socks", std::move(socks)}};
       });
       status_server->SetSwitchServer([&](const ServerInfo& server) -> bool {
-        const std::scoped_lock<std::mutex> lock(switch_mutex);
-
-        // The route manager excludes the address of the server it was
-        // started with, and that exclusion cannot be rewritten in place.
-        // Where another daemon owns the routes there is nothing to exclude.
-        if (route_manager) {
-          SPDLOG_WARN(
-              "Server switching needs --disable-routing: the route manager "
-              "pins the current server address");
+        // An explicit request pins the server: from here on the sweep only
+        // measures, it no longer moves the tunnel.
+        if (!switch_to(server)) {
           return false;
         }
-
-        if (fptn::client::status::ServerRegistry::KeyOf(server) ==
-            fptn::client::status::ServerRegistry::KeyOf(selected_server)) {
-          return true;  // already there
-        }
-
-        // A switch drops the current session before a new one exists: the
-        // server counts sessions per user and would refuse a second login.
-        // So make sure the new node answers at all first - otherwise a
-        // working tunnel would stall for the whole run of failed attempts.
-        const auto probe = fptn::utils::speed_estimator::GetDownloadTimeMs(
-            server, sni, 5, server.md5_fingerprint, censorship_strategy);
-        const std::uint32_t probe_ms =
-            probe == UINT64_MAX ? 0 : static_cast<std::uint32_t>(probe);
-        registry->RecordProbe(
-            server, probe_ms, probe_ms == 0 ? "unreachable" : "");
-        if (probe_ms == 0) {
-          SPDLOG_WARN("{} did not answer, staying on the current server",
-              fptn::client::status::ServerRegistry::DisplayName(server));
-          return false;
-        }
-
-        if (!vpn_client.SwitchClient(
-                [&]() { return make_client(server, "", 5); })) {
-          SPDLOG_ERROR("Could not switch the tunnel to {}",
-              fptn::client::status::ServerRegistry::DisplayName(server));
-          return false;
-        }
-
-        selected_server = server;
-        registry->SetActive(server);
-        SPDLOG_INFO("Switched to {}",
-            fptn::client::status::ServerRegistry::DisplayName(server));
-
-        // The watchdog watched the previous node - rebuild it for the new one.
-        if (max_ping > 0) {
-          watchdog.reset();
-          watchdog = std::make_unique<LatencyWatchdog>(server, sni,
-              censorship_strategy, max_ping,
-              [&vpn_client]() { vpn_client.Stop(); }, registry);
-        }
+        manually_pinned = true;
         return true;
       });
     }
 
     /* start event loop */
-    // Not while a server is pinned by name: a restart would pin the same one
-    // again, and asking for it is the user's decision.
+    // Nothing below moves the tunnel on its own in three cases: the server is
+    // pinned by name (asking for one is the user's decision, and a
+    // measurement does not outrank it), the route manager owns the routes so
+    // an in-place switch is impossible, or the pool holds a single server and
+    // there is nowhere to move.
+    const bool may_auto_switch =
+        !server_pinned && !route_manager && registry->Servers().size() > 1;
+
     std::unique_ptr<PoolMonitor> pool_monitor;
     if (probe_interval > 0) {
       pool_monitor = std::make_unique<PoolMonitor>(registry, sni,
-          censorship_strategy, std::chrono::seconds(probe_interval));
+          censorship_strategy, std::chrono::seconds(probe_interval), [&] {
+            if (!may_auto_switch || manually_pinned) {
+              return;
+            }
+            const auto best = BestServer(*registry);
+            if (!best) {
+              return;  // nothing answered - the current server is all there is
+            }
+            ServerInfo current;
+            {
+              const std::scoped_lock<std::mutex> lock(switch_mutex);
+              current = selected_server;
+            }
+            using Registry = fptn::client::status::ServerRegistry;
+            if (Registry::KeyOf(best->first) == Registry::KeyOf(current)) {
+              return;  // already on the fastest one
+            }
+            const auto stats = registry->Stats(current);
+            // Stopped answering, or answers past the limit: leave now,
+            // without waiting out the tolerance or the gap between switches.
+            const bool current_broken =
+                !stats.alive ||
+                (max_ping > 0 &&
+                    stats.average_ms > static_cast<std::uint32_t>(max_ping));
+            if (!current_broken) {
+              if (switch_tolerance <= 0) {
+                return;  // moving on latency alone is switched off
+              }
+              if (best->second + static_cast<std::uint32_t>(switch_tolerance) >=
+                  stats.average_ms) {
+                return;  // not enough of a gain to pay a second of silence
+              }
+              const std::scoped_lock<std::mutex> lock(switch_mutex);
+              if (std::chrono::steady_clock::now() - last_switch <
+                  kMinAutoSwitchGap) {
+                return;
+              }
+            }
+            SPDLOG_INFO("{} answers in {} ms against {} ms on {}{} - moving",
+                Registry::DisplayName(best->first), best->second,
+                stats.average_ms, Registry::DisplayName(current),
+                current_broken ? " (over the limit or dead)" : "");
+            switch_to(best->first);
+          });
     }
 
-    if (max_ping > 0 && !server_pinned) {
+    // The watchdog is the fallback for a pool nobody sweeps: it reacts in
+    // three minutes, but all it can do is stop the tunnel and have the
+    // service start the process again somewhere else. Where a sweep runs the
+    // switch happens in place instead, and a second opinion on the same
+    // question would only get in the way.
+    if (max_ping > 0 && may_auto_switch && !pool_monitor) {
       // Same lock as the switch handler: both write this pointer, and the
       // handler runs on the status API thread.
       const std::scoped_lock<std::mutex> lock(switch_mutex);

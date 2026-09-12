@@ -35,7 +35,20 @@ using ProbeCallback = std::function<void(const ServerInfo& server,
 // thread, which is noticeable on a router with a large pool.
 constexpr std::size_t kMaxProbeConcurrency = 8;
 
+// Downloads a 100 KB test file: the number says something about throughput,
+// not only about the round trip. Kept for the places that want that.
 std::uint64_t GetDownloadTimeMs(const ServerInfo& server,
+    const std::string& sni,
+    int timeout,
+    const std::string& md5_fingerprint,
+    fptn::protocol::https::CensorshipStrategy censorship_strategy);
+
+// A latency probe: the same TLS connection, but the request behind it asks
+// for the DNS record - a few dozen bytes - instead of 100 KB. This is what
+// sing-box measures with generate_204, and what a pool sweep needs: sweeping
+// thirty-five servers every few minutes at 100 KB each moves megabytes for a
+// number that the handshake alone already gives.
+std::uint64_t GetLatencyMs(const ServerInfo& server,
     const std::string& sni,
     int timeout,
     const std::string& md5_fingerprint,

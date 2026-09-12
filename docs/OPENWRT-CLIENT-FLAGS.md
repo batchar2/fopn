@@ -74,7 +74,7 @@ added at all when false. True means `true`, the string `"true"`, `"1"`, `"yes"`,
 | `--access-token` | — | Access token (`fptn://` or the compressed `fptnb:`). **Required.** The flag repeats: several tokens form one shared server pool |
 | `--preferred-server` | — | Name of the server to connect to without a race. Case-insensitive. When names collide between tokens, qualify it as `Service/Name` |
 | `--exclude-servers` | — | Regular expression: servers whose name matches are left out of the pool, e.g. `Russia\|Vietnam`. Both the bare name and `Service/Name` are tested, so a whole service can be dropped |
-| `--max-ping` | `0` (no limit) | Latency limit in milliseconds. A server above it is not picked, and the one in use is replaced if it stays above |
+| `--max-ping` | `5000` (`0` disables) | Latency limit in milliseconds. A server above it is not picked, and the one in use is replaced if it stays above |
 
 Several tokens are **not** several tunnels. The client merges their servers into
 one list, tagging each with its own account, and works through a single chosen
@@ -92,8 +92,28 @@ How a server is chosen:
 
 After that a watchdog measures the latency once a minute. Three readings in a
 row past the limit and the tunnel is brought down, the process exits cleanly,
-and the service starts it again on a different server. The watchdog is created
-only when `--max-ping > 0` and only if the server is not pinned by name.
+and the service starts it again on a different server. A reading that times out
+counts as over the limit, so a server that stops answering is left within three
+minutes.
+
+The watchdog is created unless one of three things is true: `--max-ping` is `0`,
+the server is pinned with `--preferred-server`, or the pool holds a single
+server. The last one matters on a router: with nowhere to move, dropping the
+tunnel would restart the process every three minutes and change nothing, and a
+slow server beats no server.
+
+What the number measures is not an ICMP round trip. The probe opens a TLS
+connection to the server, with the obfuscation and SNI the tunnel itself uses,
+and downloads a 100 KB test file (`/api/v1/test/file.bin`) with a five-second
+timeout. A healthy distant server therefore reads as hundreds of milliseconds
+and a busy one as a second or two, which is why the default sits at five
+seconds - the point past which the tunnel is unusable rather than merely slow.
+The traffic cost is 100 KB a minute per client, and it does not go through the
+tunnel.
+
+Nothing keeps a bad server out for longer than the run it failed in: the pool
+is rebuilt on every start, and a server dropped for being slow is measured
+again next time. It stays out only while it stays slow.
 
 ## Coexisting with a transparent proxy
 
@@ -119,7 +139,8 @@ and dnsmasq are left alone, and the routing table belongs to whoever created it.
 |---|---|---|
 | `--status-listen` | — | Serve a local HTTP API with the server list and their latency, e.g. `127.0.0.1:9091` |
 | `--status-secret` | — | Token: requests must carry `Authorization: Bearer <token>`. Empty means no check, and then the endpoint may only be bound to the loopback |
-| `--probe-interval` | `0` | Re-measure the whole pool every N seconds. `0` disables it |
+| `--probe-interval` | `180` | Re-measure the whole pool every N seconds. `0` disables it |
+| `--switch-tolerance` | `500` | How much faster another server must be, in milliseconds, before the tunnel moves to it on its own. `0` leaves only the "stopped answering" case |
 
 The client knows which servers a token carries and how long each takes to
 answer, but used to show that to nobody: the only output was log lines and the
@@ -156,12 +177,44 @@ $ curl -s -H 'Authorization: Bearer secret' 127.0.0.1:9091/proxies
                   "history":[{"time":"2026-09-10T11:27:52.101Z","delay":0}]}}}
 ```
 
-Without `--probe-interval` the window holds only what was measured while
+With `--probe-interval 0` the window holds only what was measured while
 picking a server at startup, plus the checks of the current node from
 `--max-ping`. That is, a server that was down at launch and has recovered since
-will keep counting as dead. A sensible value on a router is minutes rather than
-seconds: every probe downloads a test file, and sweeping a large pool often
-heats the CPU for nothing.
+keeps counting as dead. The sweep is on by default for that reason.
+
+A sweep probes every server, at most eight at a time, so one dead node does not
+hold up the rest. The probe is the same TLS connection the tunnel opens, with
+the same obfuscation and SNI, followed by a request for the DNS record - a few
+dozen bytes. It used to download a 100 KB test file, which turned a pool of
+thirty-five servers into 3.5 MB per sweep for a number the handshake already
+gives.
+
+### Moving on its own
+
+After each sweep the client compares the server in use with the best one that
+answered, and moves the tunnel when that is clearly worth it. The shape is
+sing-box's urltest, with the thresholds set for a tunnel rather than an
+outbound - sing-box switches on 50 ms because switching costs it nothing,
+while here it costs about a second of silence and a fresh login against a
+server that counts sessions per user:
+
+- **the server in use stopped answering, or answers past `--max-ping`** - move
+  at once, without waiting for anything else;
+- **otherwise** - move only if another server is faster by more than
+  `--switch-tolerance`, and only if the last move was more than ten minutes
+  ago. Without that floor a pool with two servers a few hundred milliseconds
+  apart would swap on every sweep.
+
+The comparison uses the average of a server's measurement window, not its last
+reading: a single probe lies often enough - the network blinked, the node was
+busy - that a decision made on one moves the tunnel for nothing.
+
+Nothing moves on its own in four cases: the server is pinned with
+`--preferred-server`, the pool holds one server, the client owns the routes
+(see below), or somebody has picked a server through `PUT /proxies/<name>`.
+That last one is deliberate: an explicit choice outranks a measurement, and
+undoing it on the next sweep would read as the client fighting the dashboard.
+It holds until the process restarts.
 
 ### Switching servers at runtime
 

@@ -33,29 +33,55 @@ constexpr std::uint64_t kMaxTimeout = UINT64_MAX;
 
 namespace fptn::utils::speed_estimator {
 
+namespace {
+
+// Both probes differ only in what they ask for, so the timing, the error
+// handling and the "no answer" value live in one place.
+std::uint64_t MeasureRequestMs(const ServerInfo& server,
+    const std::string& sni,
+    int timeout,
+    const std::string& md5_fingerprint,
+    fptn::protocol::https::CensorshipStrategy censorship_strategy,
+    const char* url,
+    const char* what) {
+  try {
+    auto const start = std::chrono::high_resolution_clock::now();
+    ApiClient cli(
+        server.host, server.port, sni, md5_fingerprint, censorship_strategy);
+    auto const resp = cli.Get(url, timeout);
+    if (resp.code == 200) {
+      auto const end = std::chrono::high_resolution_clock::now();
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+          end - start)
+          .count();
+    }
+  } catch (const std::exception& ex) {
+    SPDLOG_WARN("Exception in {}: {}", what, ex.what());
+  } catch (...) {
+    SPDLOG_WARN("Unknown exception in {}", what);
+  }
+  return kMaxTimeout;
+}
+
+}  // namespace
+
 std::uint64_t GetDownloadTimeMs(const ServerInfo& server,
     const std::string& sni,
     int timeout,
     const std::string& md5_fingerprint,
     fptn::protocol::https::CensorshipStrategy censorship_strategy) {
-  try {
-    auto const start = std::chrono::high_resolution_clock::now();
-    ApiClient cli(
-        server.host, server.port, sni, md5_fingerprint, censorship_strategy);
-    auto const resp = cli.Get(common::api::kApiTestFileBinUrl, timeout);
-    if (resp.code == 200) {
-      auto const end = std::chrono::high_resolution_clock::now();
-      const std::uint64_t ms =
-          std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
-              .count();
-      return ms;
-    }
-  } catch (const std::exception& ex) {
-    SPDLOG_WARN("Exception in GetDownloadTimeMs: {}", ex.what());
-  } catch (...) {
-    SPDLOG_WARN("Unknown exception in GetDownloadTimeMs");
-  }
-  return kMaxTimeout;
+  return MeasureRequestMs(server, sni, timeout, md5_fingerprint,
+      censorship_strategy, common::api::kApiTestFileBinUrl,
+      "GetDownloadTimeMs");
+}
+
+std::uint64_t GetLatencyMs(const ServerInfo& server,
+    const std::string& sni,
+    int timeout,
+    const std::string& md5_fingerprint,
+    fptn::protocol::https::CensorshipStrategy censorship_strategy) {
+  return MeasureRequestMs(server, sni, timeout, md5_fingerprint,
+      censorship_strategy, common::api::kApiDnsUrl, "GetLatencyMs");
 }
 
 std::optional<LoginResult> FindServerByLogin(const std::string& sni,
