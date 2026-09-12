@@ -35,6 +35,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <spdlog/spdlog.h>  // NOLINT(build/include_order)
 
 #include "common/api/handle.h"
+#include "common/data/packet_batch.h"
 #include "common/network/resolv.h"
 #include "common/network/utils.h"
 #include "common/utils/utils.h"
@@ -279,7 +280,7 @@ Session::Session(bool enable_detect_probing,
           obfuscator_socket_type(tcp_stream_type(std::move(socket))), ctx)),
       strand_(ws_.get_executor()),
       // Capacity is counted in batches, not packets.
-      write_channel_(strand_, 32),
+      write_channel_(strand_, kMaxWriteQueueBatches),
       api_handles_(api_handles),
       handshake_cache_manager_(std::move(handshake_cache_manager)),
       ws_open_callback_(std::move(ws_open_callback)),
@@ -299,7 +300,7 @@ Session::Session(bool enable_detect_probing,
     ws_.text(false);
     ws_.binary(true);
     ws_.auto_fragment(false);
-    ws_.read_message_max(256 * 1024);
+    ws_.read_message_max(kMaxReadMessageBytes);
     ws_.set_option(boost::beast::websocket::stream_base::timeout::suggested(
         boost::beast::role_type::server));
     ws_.set_option(boost::beast::websocket::stream_base::timeout{
@@ -975,7 +976,7 @@ boost::asio::awaitable<void> Session::ProxyWithFallback(
 boost::asio::awaitable<void> Session::RunReader() {
   boost::system::error_code ec;
   boost::beast::flat_buffer buffer;
-  buffer.reserve(4 * 1024 * 1024);
+  buffer.reserve(kInitialReadBufferBytes);
   auto token = boost::asio::redirect_error(boost::asio::use_awaitable, ec);
   try {
     while (running_ && !ec) {
@@ -1044,6 +1045,7 @@ boost::asio::awaitable<void> Session::RunSender() {
   constexpr std::size_t kMaxBatchSize = 128;
   auto token = boost::asio::bind_cancellation_slot(
       cancel_signal_.slot(), boost::asio::as_tuple(boost::asio::use_awaitable));
+  std::size_t in_flight_bytes = 0;
   try {
     BatchIPPacketPtr pending;
     while (running_) {
@@ -1077,7 +1079,10 @@ boost::asio::awaitable<void> Session::RunSender() {
       }
 
       if (!packets.empty()) {
+        in_flight_bytes = fptn::common::data::PacketBatchPayloadBytes(packets);
         co_await WriteFrame(std::move(packets));
+        write_queue_budget_.Release(in_flight_bytes);
+        in_flight_bytes = 0;
       }
     }
   } catch (const boost::system::system_error& err) {
@@ -1091,6 +1096,7 @@ boost::asio::awaitable<void> Session::RunSender() {
         "RunSender exception (client_id={}): {}", client_id_, e.what());
   }
 
+  write_queue_budget_.Release(in_flight_bytes);
   Close();
   co_return;
 }
@@ -1435,11 +1441,28 @@ void Session::SendBatch(common::network::BatchIPPacketPtr pkts) {
     return;
   }
 
+  const std::size_t batch_bytes =
+      fptn::common::data::PacketBatchPayloadBytes(pkts);
+  if (!write_queue_budget_.TryAcquire(batch_bytes)) {
+    if (!full_queue_) {
+      full_queue_ = true;
+      SPDLOG_WARN(
+          "Session write queue byte budget is exhausted "
+          "(client_id={} used={} max={})",
+          client_id_, write_queue_budget_.UsedBytes(),
+          write_queue_budget_.MaxBytes());
+    }
+    return;
+  }
+
   boost::system::error_code ec;
   const bool status = write_channel_.try_send(ec, std::move(pkts));
-  if (!status && !full_queue_) {
-    full_queue_ = true;
-    SPDLOG_WARN("Session::send queue is full (client_id={})", client_id_);
+  if (!status) {
+    write_queue_budget_.Release(batch_bytes);
+    if (!full_queue_) {
+      full_queue_ = true;
+      SPDLOG_WARN("Session write queue is full (client_id={})", client_id_);
+    }
   }
 }
 

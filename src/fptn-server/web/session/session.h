@@ -23,6 +23,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 
+#include "common/data/byte_budget.h"
 #include "common/data/channel.h"
 
 #include "fptn-protocol-lib/https/obfuscator/tcp_stream/tcp_stream.h"
@@ -119,6 +120,11 @@ class Session : public std::enable_shared_from_this<Session> {
           request);
 
  private:
+  static constexpr std::size_t kMaxWriteQueueBatches = 32;
+  static constexpr std::size_t kMaxWriteQueueBytes = 4U * 1024U * 1024U;
+  static constexpr std::size_t kInitialReadBufferBytes = 64U * 1024U;
+  static constexpr std::size_t kMaxReadMessageBytes = 256U * 1024U;
+
   fptn::ClientID client_id_ = MAX_CLIENT_ID;
 
   const bool enable_detect_probing_;
@@ -139,6 +145,7 @@ class Session : public std::enable_shared_from_this<Session> {
   boost::asio::experimental::concurrent_channel<void(
       boost::system::error_code, fptn::common::network::BatchIPPacketPtr)>
       write_channel_;
+  fptn::common::data::ByteBudget write_queue_budget_{kMaxWriteQueueBytes};
 
   const ApiHandleMap& api_handles_;
 

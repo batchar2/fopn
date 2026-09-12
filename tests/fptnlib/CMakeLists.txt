@@ -34,3 +34,8 @@ set(LIBS
 add_executable(ApiClientTest api_client/ApiClientTest.cpp)
 target_link_libraries(ApiClientTest PRIVATE ${LIBS})
 add_test(NAME ApiClientTest COMMAND ApiClientTest)
+
+# --- Protocol policy tests ---
+add_executable(SerializerPolicyTest protocol/SerializerPolicyTest.cpp)
+target_link_libraries(SerializerPolicyTest PRIVATE ${LIBS})
+add_test(NAME SerializerPolicyTest COMMAND SerializerPolicyTest)

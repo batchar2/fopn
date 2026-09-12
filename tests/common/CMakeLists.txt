@@ -34,6 +34,16 @@ add_executable(ChannelTest data/ChannelTest.cpp)
 target_link_libraries(ChannelTest PRIVATE ${LIBS})
 add_test(NAME ChannelTest COMMAND ChannelTest)
 
+# --- Byte budget test ---
+add_executable(ByteBudgetTest data/ByteBudgetTest.cpp)
+target_link_libraries(ByteBudgetTest PRIVATE ${LIBS})
+add_test(NAME ByteBudgetTest COMMAND ByteBudgetTest)
+
+# --- Packet batch test ---
+add_executable(PacketBatchTest data/PacketBatchTest.cpp)
+target_link_libraries(PacketBatchTest PRIVATE ${LIBS})
+add_test(NAME PacketBatchTest COMMAND PacketBatchTest)
+
 # --- IPv4 Generator test ---
 add_executable(IPv4GeneratorTest network/IPv4GeneratorTest.cpp)
 target_link_libraries(IPv4GeneratorTest PRIVATE ${LIBS})
