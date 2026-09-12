@@ -263,7 +263,6 @@ namespace fptn::web {
 using BatchIPPacketPtr = common::network::BatchIPPacketPtr;
 
 Session::Session(bool enable_detect_probing,
-    std::string default_proxy_domain,
     std::vector<std::string> allowed_sni_list,
     std::string server_external_ips,
     boost::asio::ip::tcp::socket&& socket,
@@ -274,7 +273,6 @@ Session::Session(bool enable_detect_probing,
     WebSocketNewIPPacketCallback ws_new_ippacket_callback,
     WebSocketCloseConnectionCallback ws_close_callback)
     : enable_detect_probing_(enable_detect_probing),
-      default_proxy_domain_(std::move(default_proxy_domain)),
       allowed_sni_list_(std::move(allowed_sni_list)),
       server_external_ips_(std::move(server_external_ips)),
       ws_(ssl_stream_type(
@@ -361,7 +359,7 @@ boost::asio::awaitable<void> Session::Run() {
 
   std::array<std::uint8_t, 16384> client_hello{};
   std::size_t client_hello_size = 0;
-  std::string client_sni = default_proxy_domain_;
+  std::string client_sni = ProxyFallbackDomain();
   if (obfuscator_opt.value() == nullptr) {
     auto& tcp_socket = boost::beast::get_lowest_layer(ws_).socket();
 
@@ -392,7 +390,7 @@ boost::asio::awaitable<void> Session::Run() {
       client_sni = NormalizeSni(sni_opt.value());
     }
     client_sni = ApplyAllowedSniList(std::move(client_sni), allowed_sni_list_,
-        default_proxy_domain_, client_id_);
+        ProxyFallbackDomain(), client_id_);
   }
 
   // Detect probing (only for null obfuscator)
@@ -445,10 +443,11 @@ boost::asio::awaitable<void> Session::Run() {
       }
 
       // Prevent recursive proxy attempts for Reality Mode
-      if (result.sni != default_proxy_domain_) {
+      const std::string fallback_domain = ProxyFallbackDomain();
+      if (result.sni != fallback_domain) {
         const auto self_proxy = co_await IsSniSelfProxyAttempt(result.sni);
         if (self_proxy) {
-          co_await HandleProxy(default_proxy_domain_, 443);
+          co_await HandleProxy(fallback_domain, 443);
           Close();
           co_return;
         }
@@ -524,18 +523,27 @@ boost::asio::awaitable<void> Session::Run() {
   co_return;
 }
 
+std::string Session::ProxyFallbackDomain() const {
+  const auto it = std::ranges::find_if(
+      allowed_sni_list_, [this](const std::string& domain) {
+        return !handshake_cache_manager_->IsDead(domain);
+      });
+  return it != allowed_sni_list_.end() ? *it : allowed_sni_list_.front();
+}
+
 boost::asio::awaitable<Session::ProbingResult> Session::DetectProbing(
     const std::uint8_t* client_hello, std::size_t size, std::string sni) {
   try {
     // Detect and prevent recursive proxying to the local server
-    if (sni != default_proxy_domain_) {
+    const std::string fallback_domain = ProxyFallbackDomain();
+    if (sni != fallback_domain) {
       const bool is_recursive_attempt = co_await IsSniSelfProxyAttempt(sni);
       if (is_recursive_attempt) {
         SPDLOG_WARN(
             "Detected recursive proxy attempt! "
             "Client: {}, SNI: {}, Redirecting to default SNI: {}",
-            client_id_, sni, default_proxy_domain_);
-        sni = default_proxy_domain_;
+            client_id_, sni, fallback_domain);
+        sni = fallback_domain;
       }
     }
 
@@ -582,7 +590,7 @@ boost::asio::awaitable<Session::ProbingResult> Session::DetectProbing(
     SPDLOG_ERROR("Unknown exception during probing (client_id={})", client_id_);
   }
   co_return ProbingResult{
-      .is_probing = true, .sni = default_proxy_domain_, .should_close = true};
+      .is_probing = true, .sni = ProxyFallbackDomain(), .should_close = true};
 }
 
 // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -756,10 +764,12 @@ boost::asio::awaitable<bool> Session::PerformFakeHandshake2(
     const auto client_hello_size = client_hello.value().size();
 
     /* Send server hello */
+    std::string answered_domain;
     const auto handshake_answer =
         co_await handshake_cache_manager_->GetHandshake(sni,
             client_hello.value().data(), client_hello_size,
-            std::chrono::seconds(2), std::chrono::seconds(3));
+            std::chrono::seconds(2), std::chrono::seconds(3),
+            &answered_domain);
     if (!handshake_answer) {
       co_return false;
     }
@@ -794,8 +804,9 @@ boost::asio::awaitable<bool> Session::PerformFakeHandshake2(
 
     SPDLOG_INFO(
         "Reality mode2 completed, ready for real handshake (client_id={}) "
-        "request_size = {} response_size: {}",
-        client_id_, client_hello_size, handshake_answer_size);
+        "request_size = {} response_size: {} decoy={}",
+        client_id_, client_hello_size, handshake_answer_size,
+        answered_domain);
     co_return true;
   } catch (const std::exception& e) {
     SPDLOG_ERROR("HandleRealityMode2 exception (client_id={}): {}", client_id_,

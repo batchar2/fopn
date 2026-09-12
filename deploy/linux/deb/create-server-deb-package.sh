@@ -47,26 +47,21 @@ TUN_INTERFACE_NAME=fptn0
 
 # MTU size of the VPN tunnel interface
 # Leave empty to use the built-in default
-MTU_SIZE=1420
+MTU_SIZE=1400
 
 # Path to the file with VPN users (created by fptn-passwd)
 # Leave empty to use the default (/etc/fptn/users.list)
 USERFILE=/etc/fptn/users.list
 
 # Enable detection of probing attempts (experimental; accepted values: true or false)
-ENABLE_DETECT_PROBING=false
-
-# Default domain where non-VPN client traffic will be redirected
-# When someone scans your server (not using VPN), their connection will be forwarded to this domain instead
-DEFAULT_PROXY_DOMAIN=cdnvideo.com
+ENABLE_DETECT_PROBING=true
 
 # Comma-separated list of allowed website domains for non-VPN clients
 # This acts like a "whitelist" of websites that scanning bots are allowed to reach
 # Behavior logic:
-#   - List is empty (default): allows ALL domains, proxy all non-VPN traffic to the SNI in the TLS-handshake
-#   - List is NOT empty: use as whitelist:
-#       - Client SNI in list -> proxy to client's SNI
-#       - Client SNI not in list -> proxy to --default-proxy-domain
+#   - List is empty: falls back to the built-in default domain
+#   - Client SNI in list -> proxy to client's SNI
+#   - Client SNI not in list -> proxy to the first list entry
 # Domain matching includes all subdomains:
 #   - If "example.com" is in the list, it will match:
 #       - example.com (exact match)
@@ -76,7 +71,7 @@ DEFAULT_PROXY_DOMAIN=cdnvideo.com
 # Examples:
 #   ALLOWED_SNI_LIST=example.com,test.org
 #   This allows: example.com, test.org and ALL their subdomains
-ALLOWED_SNI_LIST=
+ALLOWED_SNI_LIST=dashboard.cdnvideo.ru,gosuslugi.ru,sber.ru,id.sber.ru,tbank.ru,cdn.tbank.ru,alfabank.ru,mos.ru,vk.com,wildberries.ru,ozon.ru,2gis.ru,mts.ru,dzen.ru,vprok.ru,x5.ru,perekrestok.ru,yandex.ru,yandex.com,yandex.net,max.ru,google.com,cloudflare.com
 
 # Block BitTorrent traffic to prevent abuse
 # (accepted values: true or false; enabled unless set to false)
@@ -163,7 +158,6 @@ ExecStart=/usr/bin/$(basename "$SERVER_BIN") \
   --out-network-interface=\${OUT_NETWORK_INTERFACE} \
   --server-port=\${PORT} \
   --enable-detect-probing=\${ENABLE_DETECT_PROBING} \
-  --default-proxy-domain=\${DEFAULT_PROXY_DOMAIN} \
   --allowed-sni-list=\${ALLOWED_SNI_LIST} \
   --tun-interface-name=\${TUN_INTERFACE_NAME} \
   --mtu-size=\${MTU_SIZE} \

@@ -238,18 +238,15 @@ ServerConfig::ServerConfig(int argc, char* argv[])
           "Enable detection of non-FPTN clients or probing attempts during SSL "
           "handshake. ")
       .default_value("false");
-  args_.add_argument("--default-proxy-domain")
-      .help("Default domain for proxying non-VPN clients.")
-      .default_value(FPTN_DEFAULT_SNI);
   args_.add_argument("--allowed-sni-list")
       .help(
-          "Comma-separated list of allowed SNI hostnames for non-VPN clients.\n"
-          "Behavior logic:\n"
-          " - List is empty (default): proxy all non-VPN traffic to "
-          "--default-proxy-domain\n"
-          " - List is NOT empty: use as whitelist:\n"
-          "   - Client SNI in list -> proxy to client's SNI\n"
-          "   - Client SNI not in list -> proxy to --default-proxy-domain")
+          "Comma-separated list of decoy domains for non-VPN (scanner) "
+          "traffic.\n"
+          "When a non-VPN client connects, its traffic is proxied to a real "
+          "website:\n"
+          " - if its SNI is in this list -> proxy to that SNI\n"
+          " - otherwise -> proxy to the first reachable domain from the list\n"
+          "If the list is empty, a built-in default domain is used.")
       .default_value("");
   // Prevent self-proxy
   args_.add_argument("--server-external-ips")
@@ -378,22 +375,13 @@ bool ServerConfig::EnableDetectProbing() const {
 }
 
 [[nodiscard]]
-std::string ServerConfig::DefaultProxyDomain() const {
-  auto default_domain = args_.get<std::string>("--default-proxy-domain");
-  if (default_domain.empty()) {
-    return FPTN_DEFAULT_SNI;
-  }
-  return default_domain;
-}
-
-[[nodiscard]]
 std::vector<std::string> ServerConfig::AllowedSniList() const {
-  const auto allowed_sni = args_.get<std::string>("--allowed-sni-list");
-  if (!allowed_sni.empty()) {
-    return common::utils::SplitCommaSeparated(
-        allowed_sni + "," + DefaultProxyDomain());
+  auto list = common::utils::SplitCommaSeparated(
+      args_.get<std::string>("--allowed-sni-list"));
+  if (list.empty()) {
+    list.emplace_back(FPTN_DEFAULT_SNI);
   }
-  return {};
+  return list;
 }
 
 std::size_t ServerConfig::MaxActiveSessionsPerUser() const {

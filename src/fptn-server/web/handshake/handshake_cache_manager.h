@@ -32,9 +32,15 @@ class HandshakeCacheManager final {
       const std::uint8_t* buffer_ptr,
       std::size_t size,
       const std::chrono::seconds& target_timeout,
-      const std::chrono::seconds& fallback_timeout);
+      const std::chrono::seconds& fallback_timeout,
+      std::string* answered_domain = nullptr);
 
   boost::asio::awaitable<void> Warmup(const std::chrono::seconds& timeout);
+
+  boost::asio::awaitable<void> MonitorLiveness(
+      const std::chrono::seconds& timeout);
+
+  boost::asio::awaitable<void> RetryDead(const std::chrono::seconds& timeout);
 
   HandshakeResponse CheckCache(const std::string& cache_key);
 

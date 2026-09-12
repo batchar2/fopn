@@ -27,8 +27,6 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 namespace {
 
-constexpr auto kDeadDomainTtl = std::chrono::seconds(60);
-
 std::vector<std::uint8_t> GenerateChromeClientHello(const std::string& sni) {
   const auto handshake =
       camouflage::tls::Builder::Create()
@@ -115,12 +113,11 @@ boost::asio::awaitable<fptn::web::HandshakeResponse> FetchForwardedHandshake(
         data.insert(data.end(), buf.begin(), buf.begin() + bytes);
       }
 
-      if (fptn::common::network::IsRecordAlignedServerFlight(data)) {
+      if (fptn::common::network::IsServerHelloComplete(data)) {
         *full_response = std::move(data);
       } else {
         SPDLOG_WARN(
-            "Decoy {} answered {} bytes that do not form whole TLS "
-            "records",
+            "Decoy {} answered {} bytes: not a complete TLS server flight",
             sni, data.size());
       }
     };
@@ -180,7 +177,7 @@ bool HandshakeCacheManager::IsDead(const std::string& domain) {
   if (it == dead_.end()) {
     return false;
   }
-  if (std::chrono::steady_clock::now() - it->second < kDeadDomainTtl) {
+  if (std::chrono::steady_clock::now() - it->second < cache_ttl_) {
     return true;
   }
   dead_.erase(it);
@@ -214,6 +211,7 @@ boost::asio::awaitable<HandshakeResponse> HandshakeCacheManager::Fetch(
   }
 
   const std::unique_lock<std::mutex> lock(mutex_);  // mutex
+  dead_.erase(domain);
   cache_[domain] = CacheEntry{
       .data = response, .timestamp = std::chrono::steady_clock::now()};
   co_return response;
@@ -239,21 +237,91 @@ boost::asio::awaitable<void> HandshakeCacheManager::Warmup(
   }
 }
 
+boost::asio::awaitable<void> HandshakeCacheManager::MonitorLiveness(
+    const std::chrono::seconds& timeout) {
+  const auto executor = co_await boost::asio::this_coro::executor;
+  boost::asio::steady_timer timer(executor);
+  const auto interval = cache_ttl_ - std::chrono::minutes(5);
+  for (;;) {
+    timer.expires_after(interval);
+    boost::system::error_code ec;
+    co_await timer.async_wait(
+        boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (ec == boost::asio::error::operation_aborted) {
+      co_return;
+    }
+    if (ec) {
+      SPDLOG_WARN("MonitorLiveness timer error, continuing: {}", ec.message());
+      continue;
+    }
+    co_await Warmup(timeout);
+  }
+}
+
+boost::asio::awaitable<void> HandshakeCacheManager::RetryDead(
+    const std::chrono::seconds& timeout) {
+  const auto executor = co_await boost::asio::this_coro::executor;
+  boost::asio::steady_timer timer(executor);
+  for (;;) {
+    timer.expires_after(std::chrono::minutes(5));
+    boost::system::error_code ec;
+    co_await timer.async_wait(
+        boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (ec == boost::asio::error::operation_aborted) {
+      co_return;
+    }
+    if (ec) {
+      SPDLOG_WARN("RetryDead timer error, continuing: {}", ec.message());
+      continue;
+    }
+    std::size_t dead_count = 0;
+    for (const auto& domain : decoy_domains_) {
+      if (!IsDead(domain)) {
+        continue;
+      }
+      ++dead_count;
+      boost::asio::co_spawn(
+          executor,
+          [this, &domain, timeout]() -> boost::asio::awaitable<void> {
+            try {
+              co_await Fetch(
+                  domain, GenerateChromeClientHello(domain), timeout);
+            } catch (const std::exception& e) {
+              SPDLOG_ERROR("Retry decoy {} failed: {}", domain, e.what());
+            }
+          },
+          boost::asio::detached);
+    }
+    if (dead_count == decoy_domains_.size()) {
+      SPDLOG_ERROR(
+          "All decoy domains are dead - reality mode will fail. Check "
+          "ALLOWED_SNI_LIST and outbound TLS/DNS from this host");
+    }
+  }
+}
+
 boost::asio::awaitable<HandshakeResponse> HandshakeCacheManager::GetHandshake(
     const std::string& sni,
     const std::uint8_t* buffer_ptr,
     std::size_t size,
     const std::chrono::seconds& target_timeout,
-    const std::chrono::seconds& fallback_timeout) {
+    const std::chrono::seconds& fallback_timeout,
+    std::string* answered_domain) {
   const std::vector<std::uint8_t> client_hello(buffer_ptr, buffer_ptr + size);
 
   const auto cached_response = CheckCache(sni);
   if (cached_response && !cached_response->empty()) {
+    if (answered_domain) {
+      *answered_domain = sni;
+    }
     co_return cached_response;
   }
   if (!IsDead(sni)) {
     const auto response = co_await Fetch(sni, client_hello, target_timeout);
     if (response) {
+      if (answered_domain) {
+        *answered_domain = sni;
+      }
       co_return response;
     }
   }
@@ -264,11 +332,17 @@ boost::asio::awaitable<HandshakeResponse> HandshakeCacheManager::GetHandshake(
     }
     const auto cached_fallback = CheckCache(domain);
     if (cached_fallback && !cached_fallback->empty()) {
+      if (answered_domain) {
+        *answered_domain = domain;
+      }
       co_return cached_fallback;
     }
     const auto response =
         co_await Fetch(domain, client_hello, fallback_timeout);
     if (response) {
+      if (answered_domain) {
+        *answered_domain = domain;
+      }
       co_return response;
     }
   }
