@@ -36,7 +36,6 @@ using IObfuscator = std::optional<protocol::https::obfuscator::IObfuscatorSPtr>;
 class Session : public std::enable_shared_from_this<Session> {
  public:
   explicit Session(bool enable_detect_probing,
-      std::string default_proxy_domain,
       std::vector<std::string> allowed_sni_list,
       std::string server_external_ips,
       boost::asio::ip::tcp::socket&& socket,
@@ -98,6 +97,8 @@ class Session : public std::enable_shared_from_this<Session> {
 
   boost::asio::awaitable<void> ProxyWithFallback(const std::string& sni);
 
+  std::string ProxyFallbackDomain() const;
+
   boost::asio::awaitable<IObfuscator> DetectObfuscator();
 
  protected:
@@ -121,7 +122,6 @@ class Session : public std::enable_shared_from_this<Session> {
   fptn::ClientID client_id_ = MAX_CLIENT_ID;
 
   const bool enable_detect_probing_;
-  const std::string default_proxy_domain_;
   const std::vector<std::string> allowed_sni_list_;
 
   const std::string server_external_ips_;

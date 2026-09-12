@@ -9,7 +9,6 @@ exec /usr/local/bin/fptn-server \
     --out-network-interface="${OUT_NETWORK_INTERFACE}" \
     --server-port=4430 \
     --enable-detect-probing="${ENABLE_DETECT_PROBING}" \
-    --default-proxy-domain="${DEFAULT_PROXY_DOMAIN}" \
     --allowed-sni-list="${ALLOWED_SNI_LIST}" \
     --tun-interface-name=fptn0 \
     --enable-domain-blacklist-filter="$ENABLE_DOMAIN_BLACKLIST_FILTER" \

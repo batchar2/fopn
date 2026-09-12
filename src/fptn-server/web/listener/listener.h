@@ -28,7 +28,6 @@ class Listener final {
  public:
   explicit Listener(std::uint16_t port,
       bool enable_detect_probing,
-      std::string default_proxy_domain,
       std::vector<std::string> allowed_sni_list,
       boost::asio::io_context& ioc,
       fptn::common::jwt_token::TokenManagerSPtr token_manager,
@@ -46,7 +45,6 @@ class Listener final {
 
  protected:
   const bool enable_detect_probing_;
-  const std::string default_proxy_domain_;
   const std::vector<std::string> allowed_sni_list_;
 
   boost::asio::io_context& ioc_;

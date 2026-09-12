@@ -66,7 +66,7 @@ int main(int argc, char* argv[]) {
     }
 
     /* Init logger */
-    if (fptn::logger::init("fptn-server")) {
+    if (fptn::logger::init("fptn-server", false)) {
       SPDLOG_INFO("Application started successfully.");
     } else {
       std::cerr << "Logger initialization failed. Exiting application."
@@ -115,8 +115,7 @@ int main(int argc, char* argv[]) {
         config->PrometheusAccessKey(), config->TunInterfaceIPv4(),
         config->TunInterfaceIPv6(),
         /* probing */
-        config->EnableDetectProbing(), config->DefaultProxyDomain(),
-        config->AllowedSniList(),
+        config->EnableDetectProbing(), config->AllowedSniList(),
         /* sessions */
         config->MaxActiveSessionsPerUser(),
         /* External IPs */
@@ -167,7 +166,6 @@ int main(int argc, char* argv[]) {
         "VPN NETWORK IPv6:  {}\n"
         "VPN SERVER PORT:   {}\n"
         "DETECT_PROBING:    {}\n"
-        "DEFAULT_PROXY_DOMAIN: {}\n"
         "ALLOWED_SNI_LIST:     {}\n"
         "DOMAIN BLACKLIST:     {}\n"
         "ADS FILTER:           {}\n"
@@ -182,7 +180,6 @@ int main(int argc, char* argv[]) {
         config->ServerPort(),
         // Probing settings
         config->EnableDetectProbing() ? "YES" : "NO",
-        config->DefaultProxyDomain(),
         fmt::format("[{}]", fmt::join(config->AllowedSniList(), ", ")),
         // Packet filters
         config->EnableDomainBlacklistFilter() ? "YES" : "NO",

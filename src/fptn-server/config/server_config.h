@@ -58,7 +58,6 @@ class ServerConfig {
 
   [[nodiscard]] bool EnableDetectProbing() const;
 
-  [[nodiscard]] std::string DefaultProxyDomain() const;
   [[nodiscard]] std::vector<std::string> AllowedSniList() const;
 
   [[nodiscard]] std::size_t MaxActiveSessionsPerUser() const;
