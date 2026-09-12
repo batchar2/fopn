@@ -347,11 +347,17 @@ jobs:
         shell: powershell
         run: |
           docker run --rm -v "$($PWD.Path):/dst" "fptn-openwrt-${{ matrix.target }}-${{ matrix.version }}" cp -av /out/. /dst/
-      - name: Upload package RELEASE
-        if: github.event_name == 'release'
+      - name: Upload apk RELEASE
+        if: github.event_name == 'release' && matrix.version == '25.12.5'
         uses: AButler/upload-release-assets@v3.0
         with:
-          files: "fptn-client-*.apk,fptn-client-*.ipk"
+          files: "fptn-client-*.apk"
+          repo-token: ${{ secrets.CI_TOKEN }}
+      - name: Upload ipk RELEASE
+        if: github.event_name == 'release' && matrix.version == '24.10.7'
+        uses: AButler/upload-release-assets@v3.0
+        with:
+          files: "fptn-client-*.ipk"
           repo-token: ${{ secrets.CI_TOKEN }}
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
