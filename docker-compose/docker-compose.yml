@@ -1,7 +1,7 @@
 services:
   fptn-server:
     restart: unless-stopped
-    image: fptnvpn/fptn-vpn-server:0.4.4
+    image: fptnvpn/fptn-vpn-server:latest
     privileged: true
     cap_add:
       - NET_ADMIN
