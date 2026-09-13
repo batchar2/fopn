@@ -43,7 +43,7 @@
 
         <message>
             <source>Unable to find the default gateway IP address. Please check your connection and make sure no other VPN is active. If the error persists, specify the gateway address in the FPTN settings using your router's IP address, and ensure that an active internet interface (adapter) is selected. If the issue remains unresolved, please contact the developer via Telegram @fptn_chat.</source>
-            <translation>آدرس IP پیش‌فرض网关 یافت نشد. لطفاً اتصال خود را بررسی کرده و مطمئن شوید که هیچ VPN دیگری فعال نیست. در صورت ادامه خطا، آدرس网关 را در تنظیمات FPTN با استفاده از آدرس IP روتر خود مشخص کنید و مطمئن شوید که یک رابط (آداپتور) اینترنتی فعال انتخاب شده است. اگر مشکل همچنان پابرجا بود، از طریق تلگرام @fptn_chat با توسعه‌دهنده تماس بگیرید.</translation>
+            <translation>آدرس IP دروازه پیش‌فرض یافت نشد. لطفاً اتصال خود را بررسی کرده و مطمئن شوید که هیچ VPN دیگری فعال نیست. در صورت ادامه خطا، آدرس دروازه را در تنظیمات FPTN با استفاده از آدرس IP روتر خود مشخص کنید و مطمئن شوید که یک رابط (آداپتور) اینترنتی فعال انتخاب شده است. اگر مشکل همچنان پابرجا بود، از طریق تلگرام @fptn_chat با توسعه‌دهنده تماس بگیرید.</translation>
         </message>
         <message>
             <source>Configuration error</source>
@@ -84,7 +84,7 @@
         </message>
         <message>
             <source>Gateway IP Address (typically your router's address)</source>
-            <translation>آدرس IP网关 (معمولاً آدرس روتر شما)</translation>
+            <translation>آدرس IP دروازه (معمولاً آدرس روتر شما)</translation>
         </message>
         <message>
             <source>Service name</source>

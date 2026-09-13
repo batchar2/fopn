@@ -20,5 +20,6 @@
         <file>translations/fptn_ru.qm</file>
         <file>translations/fptn_en.qm</file>
         <file>translations/fptn_fa.qm</file>
+        <file>fonts/Vazirmatn-Regular.ttf</file>
     </qresource>
 </RCC>
