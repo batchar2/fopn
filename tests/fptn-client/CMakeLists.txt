@@ -58,6 +58,14 @@ target_include_directories(StatusServerTest PRIVATE "${FPTN_CLIENT_DIR}")
 target_link_libraries(StatusServerTest PRIVATE ${LIBS} Threads::Threads)
 add_test(NAME StatusServerTest COMMAND StatusServerTest)
 
+# --- State store test ---
+add_executable(StateStoreTest
+  status/StateStoreTest.cpp
+  "${FPTN_CLIENT_DIR}/status/state_store.cpp")
+target_include_directories(StateStoreTest PRIVATE "${FPTN_CLIENT_DIR}")
+target_link_libraries(StateStoreTest PRIVATE ${LIBS} Threads::Threads)
+add_test(NAME StateStoreTest COMMAND StateStoreTest)
+
 # --- Server registry test ---
 add_executable(ServerRegistryTest
   status/ServerRegistryTest.cpp

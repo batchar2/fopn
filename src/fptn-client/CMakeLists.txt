@@ -83,6 +83,8 @@ add_executable(
   utils/speed_estimator/server_info.h
   status/server_registry.cpp
   status/server_registry.h
+  status/state_store.cpp
+  status/state_store.h
   status/status_server.cpp
   status/status_server.h)
 

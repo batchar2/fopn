@@ -32,6 +32,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -59,6 +60,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 #include "vpn/vpn_manager.h"
 
 #include "fptn-client/status/server_registry.h"
+#include "fptn-client/status/state_store.h"
 #include "fptn-client/status/status_server.h"
 #include "fptn-client/socks/socks5_server.h"
 #include "fptn-protocol-lib/https/socket_options.h"
@@ -331,6 +333,19 @@ std::vector<ServerInfo> ExcludeServers(
 // high enough not to chase normal jitter. 0 turns the check off.
 constexpr int kDefaultMaxPingMs = 5000;
 
+// How long a single login in the startup race may take. Ten seconds was
+// generous to the point of costing: a worker slot is held for the whole of it,
+// and on a public pool with a handful of dead nodes the first wave of eight
+// can spend it all before the second even starts. A server that needs more
+// than six seconds to answer a login is not one worth waiting for.
+constexpr int kLoginRaceTimeoutSec = 6;
+
+// Ranks for ordering the pool from what the previous run measured. A server
+// nobody has measured goes after the ones known to answer and before the ones
+// known not to - it might be good, they demonstrably were not.
+constexpr std::uint32_t kUnknownLatencyRank = 60000;
+constexpr std::uint32_t kDeadLatencyRank = 100000;
+
 // How long a single probe is given to answer. Past this the server counts as
 // dead for that round, so it also sets how long a sweep can stall on a node
 // that accepts the connection and then says nothing.
@@ -363,7 +378,7 @@ std::optional<fptn::utils::speed_estimator::LoginResult> SelectServer(
 
   for (int round = 0; round < 3 && !servers.empty(); ++round) {
     auto result = fptn::utils::speed_estimator::FindServerByLogin(sni, servers,
-        censorship_strategy, 10,
+        censorship_strategy, kLoginRaceTimeoutSec,
         [registry](const ServerInfo& server, std::uint32_t delay_ms,
             const std::string& error) {
           if (registry) {
@@ -518,6 +533,29 @@ class PoolMonitor final {
   bool running_ = true;
   std::thread thread_;
 };
+
+// Puts the servers the previous run found fast at the front of the pool. The
+// race probes eight at a time and stops at the first answer, so the order of
+// the first wave decides how long a start takes: lead with nodes known to
+// answer and it is one round trip, lead with dead ones and it is the timeout.
+void OrderByRememberedLatency(std::vector<ServerInfo>& servers,
+    const std::unordered_map<std::string, std::uint32_t>& latency) {
+  const auto rank = [&latency](const ServerInfo& server) -> std::uint32_t {
+    const auto found =
+        latency.find(fptn::client::status::ServerRegistry::KeyOf(server));
+    if (found == latency.end()) {
+      return kUnknownLatencyRank;
+    }
+    // Zero is how a failure is recorded, here and in the Clash API alike.
+    return found->second == 0 ? kDeadLatencyRank : found->second;
+  };
+  // Stable: servers the previous run knew nothing about keep the order the
+  // tokens gave them, which is the order their service listed them in.
+  std::stable_sort(servers.begin(), servers.end(),
+      [&rank](const ServerInfo& lhs, const ServerInfo& rhs) {
+        return rank(lhs) < rank(rhs);
+      });
+}
 
 // The fastest server that is currently answering, by the average of its
 // measurement window rather than the last reading - one probe lies often
@@ -991,6 +1029,13 @@ int main(int argc, char* argv[]) {
             "status API shows fresh latency instead of one reading taken at "
             "startup, and a server that recovers becomes a candidate again. "
             "Default 180, 0 disables it");
+    args.add_argument("--state-file")
+        .default_value(std::string(""))
+        .help(
+            "Where to remember the server in use and the latency of the pool, "
+            "so a restart logs in to the server that worked instead of racing "
+            "the whole pool again. Empty (default) picks a path in /tmp keyed "
+            "by the SOCKS port; '-' turns it off");
     args.add_argument("--switch-tolerance")
         .default_value(kDefaultSwitchToleranceMs)
         .scan<'i', int>()
@@ -1069,6 +1114,7 @@ int main(int argc, char* argv[]) {
     const auto status_secret = args.get<std::string>("--status-secret");
     const auto probe_interval = args.get<int>("--probe-interval");
     const auto switch_tolerance = args.get<int>("--switch-tolerance");
+    auto state_file = args.get<std::string>("--state-file");
 
     std::uint32_t routing_mark = 0;
     {
@@ -1202,12 +1248,39 @@ int main(int argc, char* argv[]) {
       }
     }
 
+    // Keyed by the SOCKS port: a daemon that runs one helper per section
+    // would otherwise have them all writing over each other's state. '-'
+    // is the way to ask for no file at all.
+    if (state_file.empty()) {
+      state_file = fmt::format("/tmp/fptn-client-{}.state", socks_port);
+    } else if (state_file == "-") {
+      state_file.clear();
+    }
+
     fptn::utils::speed_estimator::ServerInfo selected_server;
     std::string pre_obtained_token;
     bool server_pinned = false;
     // The registry outlives server selection: the pool and its measurements
     // are needed for the whole run, not just at startup.
     auto registry = std::make_shared<fptn::client::status::ServerRegistry>();
+
+    // Writing the whole picture rather than just the winner: the next start
+    // needs the order of the pool as much as the name of the server.
+    const auto save_state = [&registry, &state_file](
+                                const ServerInfo& current) {
+      if (state_file.empty()) {
+        return;
+      }
+      using Registry = fptn::client::status::ServerRegistry;
+      fptn::client::status::PersistedState state;
+      state.selected = Registry::KeyOf(current);
+      for (const auto& server : registry->Servers()) {
+        const auto stats = registry->Stats(server);
+        state.latency[Registry::KeyOf(server)] =
+            stats.alive ? stats.average_ms : 0;
+      }
+      fptn::client::status::SaveState(state_file, state);
+    };
 
     // The status endpoint comes up before the login race, for the same reason
     // the SOCKS port does: a supervising daemon polls it within seconds, while
@@ -1249,13 +1322,20 @@ int main(int argc, char* argv[]) {
       }
     }
 
+    fptn::client::status::PersistedState saved_state;
+    const bool have_saved_state =
+        fptn::client::status::LoadState(state_file, &saved_state);
+
     try {
-      const auto servers = ExcludeServers(
+      auto servers = ExcludeServers(
           CollectServers(access_tokens, sni, censorship_strategy),
           exclude_servers);
       if (servers.empty()) {
         SPDLOG_ERROR("No servers left after --exclude-servers");
         return EXIT_FAILURE;
+      }
+      if (have_saved_state && !saved_state.latency.empty()) {
+        OrderByRememberedLatency(servers, saved_state.latency);
       }
       registry->Reset(servers);
       SPDLOG_INFO("Tokens: {}, servers: {}", access_tokens.size(),
@@ -1271,6 +1351,36 @@ int main(int argc, char* argv[]) {
           SPDLOG_WARN("Server '{}' does not exist! Check your token!",
               preferred_server);
           use_login_race = true;
+        }
+      }
+      // The server that was in use when the process last stopped is the best
+      // guess going in: it answered then, and a restart is usually a restart
+      // of the daemon rather than a change in the world. One login beats a
+      // race across the pool, and the race is still there when it fails.
+      if (use_login_race && have_saved_state && !saved_state.selected.empty()) {
+        using Registry = fptn::client::status::ServerRegistry;
+        const auto remembered = std::find_if(servers.begin(), servers.end(),
+            [&saved_state](const ServerInfo& server) {
+              return Registry::KeyOf(server) == saved_state.selected;
+            });
+        if (remembered != servers.end()) {
+          SPDLOG_INFO("Trying {} first - it was in use when the client last "
+                      "stopped",
+              Registry::DisplayName(*remembered));
+          auto sticky = fptn::utils::speed_estimator::FindServerByLogin(sni,
+              {*remembered}, censorship_strategy, kLoginRaceTimeoutSec,
+              [registry](const ServerInfo& server, std::uint32_t delay_ms,
+                  const std::string& error) {
+                registry->RecordProbe(server, delay_ms, error);
+              });
+          if (sticky) {
+            selected_server = sticky->server;
+            pre_obtained_token = std::move(sticky->access_token);
+            use_login_race = false;
+          } else {
+            SPDLOG_INFO("{} did not answer - racing the pool",
+                Registry::DisplayName(*remembered));
+          }
         }
       }
       if (use_login_race) {
@@ -1301,6 +1411,7 @@ int main(int argc, char* argv[]) {
         pre_obtained_token = std::move(login_result->access_token);
       }
       registry->SetActive(selected_server);
+      save_state(selected_server);
     } catch (const std::runtime_error& err) {
       SPDLOG_ERROR("Config error: {}", err.what());
       return EXIT_FAILURE;
@@ -1544,6 +1655,7 @@ int main(int argc, char* argv[]) {
       selected_server = server;
       last_switch = std::chrono::steady_clock::now();
       registry->SetActive(server);
+      save_state(server);
       SPDLOG_INFO("Switched to {}",
           fptn::client::status::ServerRegistry::DisplayName(server));
 
@@ -1611,17 +1723,20 @@ int main(int argc, char* argv[]) {
     if (probe_interval > 0) {
       pool_monitor = std::make_unique<PoolMonitor>(registry, sni,
           censorship_strategy, std::chrono::seconds(probe_interval), [&] {
+            ServerInfo current;
+            {
+              const std::scoped_lock<std::mutex> lock(switch_mutex);
+              current = selected_server;
+            }
+            // Fresh measurements are worth keeping whether or not they lead
+            // to a move: they are what orders the pool on the next start.
+            save_state(current);
             if (!may_auto_switch || manually_pinned) {
               return;
             }
             const auto best = BestServer(*registry);
             if (!best) {
               return;  // nothing answered - the current server is all there is
-            }
-            ServerInfo current;
-            {
-              const std::scoped_lock<std::mutex> lock(switch_mutex);
-              current = selected_server;
             }
             using Registry = fptn::client::status::ServerRegistry;
             if (Registry::KeyOf(best->first) == Registry::KeyOf(current)) {

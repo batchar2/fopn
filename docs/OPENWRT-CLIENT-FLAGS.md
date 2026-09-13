@@ -75,6 +75,7 @@ added at all when false. True means `true`, the string `"true"`, `"1"`, `"yes"`,
 | `--preferred-server` | — | Name of the server to connect to without a race. Case-insensitive. When names collide between tokens, qualify it as `Service/Name` |
 | `--exclude-servers` | — | Regular expression: servers whose name matches are left out of the pool, e.g. `Russia\|Vietnam`. Both the bare name and `Service/Name` are tested, so a whole service can be dropped |
 | `--max-ping` | `5000` (`0` disables) | Latency limit in milliseconds. A server above it is not picked, and the one in use is replaced if it stays above |
+| `--state-file` | a path in `/tmp` keyed by the SOCKS port | Where to remember the server in use and the latency of the pool, so a restart logs in to the server that worked instead of racing the pool again. `-` turns it off |
 
 Several tokens are **not** several tunnels. The client merges their servers into
 one list, tagging each with its own account, and works through a single chosen
@@ -84,11 +85,43 @@ it provides spare servers under a different account.
 How a server is chosen:
 
 1. if `--preferred-server` is set, it is used;
-2. otherwise a **login race** runs (up to 8 servers in flight), and the first
-   to answer wins;
-3. with `--max-ping` set, the winner is measured as well; if it does not fit,
+2. otherwise, if the state file names a server that is still in the pool, that
+   one is tried alone first - it answered when the process last stopped, and a
+   restart is usually a restart of the daemon rather than a change in the
+   world. One login instead of a race;
+3. otherwise a **login race** runs (up to 8 servers in flight, six seconds
+   each), and the first to answer wins;
+4. with `--max-ping` set, the winner is measured as well; if it does not fit,
    it leaves the list and the race repeats. Three rounds, then the best of the
    remaining ones is taken.
+
+### What a restart remembers
+
+The state file holds the server that was in use and the latency the pool last
+reported. It buys two things.
+
+**The server that worked is tried first.** On a public pool of forty servers a
+restart otherwise means forty logins to learn what the previous run already
+knew.
+
+**The pool is raced in a useful order.** The race probes eight at a time and
+stops at the first answer, so the order of the first wave decides how long a
+start takes. Servers the last run found fast go first, ones it never measured
+after them, and ones that did not answer last. A dead node holds a worker slot
+for the whole timeout, and eight of them at the front cost the start six
+seconds before the second wave begins.
+
+The file is written after the server is chosen, after every switch, and after
+every sweep - the measurements are worth keeping whether or not they lead to a
+move. It is rewritten atomically, so a start that reads it mid-write sees the
+old state or the new one, never half of each. Losing it costs nothing but a
+race: a missing, unreadable or malformed file simply means starting as before.
+
+The default path lives in `/tmp` and is keyed by the SOCKS port, so a daemon
+running one helper per section does not have them writing over each other. On
+a router `/tmp` is RAM: the file survives a restart of the service, which is
+what it is for, and not a reboot. Pointing `--state-file` at flash makes it
+survive a reboot too, at the cost of a write per sweep.
 
 After that a watchdog measures the latency once a minute. Three readings in a
 row past the limit and the tunnel is brought down, the process exits cleanly,
