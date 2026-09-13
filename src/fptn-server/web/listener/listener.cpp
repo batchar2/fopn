@@ -25,7 +25,6 @@ using fptn::web::Listener;
 
 Listener::Listener(std::uint16_t port,
     bool enable_detect_probing,
-    std::string default_proxy_domain,
     std::vector<std::string> allowed_sni_list,
     boost::asio::io_context& ioc,
     fptn::common::jwt_token::TokenManagerSPtr token_manager,
@@ -35,7 +34,6 @@ Listener::Listener(std::uint16_t port,
     WebSocketNewIPPacketCallback ws_new_ippacket_callback,
     WebSocketCloseConnectionCallback ws_close_callback)
     : enable_detect_probing_(enable_detect_probing),
-      default_proxy_domain_(std::move(default_proxy_domain)),
       allowed_sni_list_(std::move(allowed_sni_list)),
       ioc_(ioc),
       ctx_(boost::asio::ssl::context::tlsv13_server),
@@ -91,7 +89,7 @@ boost::asio::awaitable<void> Listener::Run() {
 
         auto session = std::make_shared<Session>(
             // probing settings
-            enable_detect_probing_, default_proxy_domain_, allowed_sni_list_,
+            enable_detect_probing_, allowed_sni_list_,
             server_external_ips_, std::move(socket), ctx_,
             // handlers
             api_handles_, handshake_cache_manager_, ws_open_callback_,

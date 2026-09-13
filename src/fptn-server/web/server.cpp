@@ -29,7 +29,6 @@ Server::Server(std::uint16_t port,
     fptn::common::network::IPv4Address dns_server_ipv4,
     fptn::common::network::IPv6Address dns_server_ipv6,
     bool enable_detect_probing,
-    std::string default_proxy_domain,
     std::vector<std::string> allowed_sni_list,
     std::size_t max_active_sessions_per_user,
     std::string server_external_ips,
@@ -44,7 +43,6 @@ Server::Server(std::uint16_t port,
       dns_server_ipv4_(std::move(dns_server_ipv4)),
       dns_server_ipv6_(std::move(dns_server_ipv6)),
       enable_detect_probing_(enable_detect_probing),
-      default_proxy_domain_(std::move(default_proxy_domain)),
       allowed_sni_list_(std::move(allowed_sni_list)),
       max_active_sessions_per_user_(max_active_sessions_per_user),
       server_external_ips_(std::move(server_external_ips)),
@@ -54,14 +52,12 @@ Server::Server(std::uint16_t port,
   using std::placeholders::_1;
   using std::placeholders::_2;
 
-  handshake_cache_manager_ = std::make_shared<HandshakeCacheManager>(
-      allowed_sni_list_.empty()
-          ? std::vector<std::string>{default_proxy_domain_}
-          : allowed_sni_list_);
+  handshake_cache_manager_ =
+      std::make_shared<HandshakeCacheManager>(allowed_sni_list_);
 
   listener_ = std::make_shared<Listener>(port_,
       // proxy settings
-      enable_detect_probing_, default_proxy_domain_, allowed_sni_list_,
+      enable_detect_probing_, allowed_sni_list_,
       // ioc
       ioc_, token_manager, handshake_cache_manager_, server_external_ips_,
       // NOLINTNEXTLINE(modernize-avoid-bind)
@@ -109,6 +105,19 @@ bool Server::Start() {
     boost::asio::co_spawn(
         ioc_,
         [this]() -> boost::asio::awaitable<void> { co_await listener_->Run(); },
+        boost::asio::detached);
+    boost::asio::co_spawn(
+        ioc_,
+        [this]() -> boost::asio::awaitable<void> {
+          co_await handshake_cache_manager_->MonitorLiveness(
+              std::chrono::seconds(3));
+        },
+        boost::asio::detached);
+    boost::asio::co_spawn(
+        ioc_,
+        [this]() -> boost::asio::awaitable<void> {
+          co_await handshake_cache_manager_->RetryDead(std::chrono::seconds(3));
+        },
         boost::asio::detached);
     // run threads
     ioc_threads_.reserve(thread_number_);

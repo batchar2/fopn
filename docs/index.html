@@ -160,7 +160,13 @@
         .dropdown:hover .dropdown-content {
             display: block;
         }
-        .toolbox-ad {
+        .download.openwrt .dropdown-content a {
+            white-space: nowrap;
+        }
+        .download.openwrt .dropdown-content small {
+            display: block;
+            color: #777;
+        }        .toolbox-ad {
             padding: 15px;
             background-color: #f9f9f9;
             border: 1px solid #ccc;
@@ -520,6 +526,12 @@
                         </svg>
                         Linux
                     </button>
+                    <button class="tablink" onclick="openTab('openwrt')">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path fill-rule="evenodd" clip-rule="evenodd" d="M6 3C6.55 3 7 3.45 7 4V13H17V4C17 3.45 17.45 3 18 3C18.55 3 19 3.45 19 4V13H20C21.1 13 22 13.9 22 15V18C22 19.1 21.1 20 20 20H4C2.9 20 2 19.1 2 18V15C2 13.9 2.9 13 4 13H5V4C5 3.45 5.45 3 6 3ZM6 15.5C5.45 15.5 5 15.95 5 16.5C5 17.05 5.45 17.5 6 17.5C6.55 17.5 7 17.05 7 16.5C7 15.95 6.55 15.5 6 15.5ZM9.5 15.5C8.95 15.5 8.5 15.95 8.5 16.5C8.5 17.05 8.95 17.5 9.5 17.5C10.05 17.5 10.5 17.05 10.5 16.5C10.5 15.95 10.05 15.5 9.5 15.5Z" fill="#19191C" fill-opacity="0.4"/>
+                        </svg>
+                        OpenWrt
+                    </button>
                 </div>
 
                 <div class="download active android">
@@ -536,8 +548,8 @@
                         </div>
                         <div class="item">
                             <p>
-                                <span class="language-en">Download Android app from the site</span>
-                                <span class="language-ru">Скачать Android приложение с сайта</span>
+                                <span class="language-en">Download Android app from GitHub</span>
+                                <span class="language-ru">Скачать Android приложение с GitHub</span>
                             </p>
                             <div class="dropdown">
                                 <a class="dropdown-button download_2 language-ru" onclick="downloadUrl('android_apk')">Скачать</a>
@@ -965,6 +977,167 @@
 
                 </div>
 
+                <div class="download openwrt">
+                    <div class="wrapper">
+                        <div class="item">
+                            <div class="dropdown">
+                                <a class="dropdown-button download_2" onclick="downloadUrl('notes')">OpenWrt 25.12</a>
+                                <div class="dropdown-content">
+                                    <a href="#" onclick="downloadOpenWrt('25.12.x', 'aarch64_generic', 'apk')"><span class="language-ru">64-битный ARM, архитектура ARMv8</span><span class="language-en">64-bit ARM, ARMv8 architecture</span><small>aarch64_generic</small></a>
+                                    <a href="#" onclick="downloadOpenWrt('25.12.x', 'aarch64_cortex-a53', 'apk')"><span class="language-ru">64-битный ARM, процессор Cortex-A53</span><span class="language-en">64-bit ARM, Cortex-A53 CPU</span><small>aarch64_cortex-a53</small></a>
+                                    <a href="#" onclick="downloadOpenWrt('25.12.x', 'arm_cortex-a7_neon-vfpv4', 'apk')"><span class="language-ru">32-битный ARM, процессор Cortex-A7</span><span class="language-en">32-bit ARM, Cortex-A7 CPU</span><small>arm_cortex-a7_neon-vfpv4</small></a>
+                                    <a href="#" onclick="downloadOpenWrt('25.12.x', 'x86_64', 'apk')"><span class="language-ru">64-битный Intel или AMD</span><span class="language-en">64-bit Intel or AMD</span><small>x86_64</small></a>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="item">
+                            <div class="dropdown">
+                                <a class="dropdown-button download_2" onclick="downloadUrl('notes')">OpenWrt 24.10</a>
+                                <div class="dropdown-content">
+                                    <a href="#" onclick="downloadOpenWrt('24.10.x', 'aarch64_generic', 'ipk')"><span class="language-ru">64-битный ARM, архитектура ARMv8</span><span class="language-en">64-bit ARM, ARMv8 architecture</span><small>aarch64_generic</small></a>
+                                    <a href="#" onclick="downloadOpenWrt('24.10.x', 'aarch64_cortex-a53', 'ipk')"><span class="language-ru">64-битный ARM, процессор Cortex-A53</span><span class="language-en">64-bit ARM, Cortex-A53 CPU</span><small>aarch64_cortex-a53</small></a>
+                                    <a href="#" onclick="downloadOpenWrt('24.10.x', 'arm_cortex-a7_neon-vfpv4', 'ipk')"><span class="language-ru">32-битный ARM, процессор Cortex-A7</span><span class="language-en">32-bit ARM, Cortex-A7 CPU</span><small>arm_cortex-a7_neon-vfpv4</small></a>
+                                    <a href="#" onclick="downloadOpenWrt('24.10.x', 'x86_64', 'ipk')"><span class="language-ru">64-битный Intel или AMD</span><span class="language-en">64-bit Intel or AMD</span><small>x86_64</small></a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="toolbox-ad language-ru">
+                        <h3>Установка и настройка</h3>
+
+                        <br/>
+
+                        <p>
+                            Пакет выбирается по ветке OpenWrt и архитектуре пакетов роутера. Архитектуру покажет сам роутер — на 25.12:
+                        </p>
+
+                        <code>
+                            apk --print-arch
+                        </code>
+                        <br/>
+                        <br/>
+
+                        <p>
+                            На 24.10 архитектура — строка с самым большим числом, например <code>arch aarch64_cortex-a53 10</code>:
+                        </p>
+
+                        <code>
+                            opkg print-architecture
+                        </code>
+                        <br/>
+                        <br/>
+
+                        <p>
+                            Перенесите пакет на роутер и установите. На 25.12:
+                        </p>
+
+                        <code>
+                            scp fptn-client-*.apk root@192.168.1.1:/tmp/
+                        </code>
+                        <br/>
+                        <code>
+                            apk update &amp;&amp; apk add --allow-untrusted /tmp/fptn-client-*.apk
+                        </code>
+                        <br/>
+                        <br/>
+
+                        <p>
+                            На 24.10:
+                        </p>
+
+                        <code>
+                            scp fptn-client-*.ipk root@192.168.1.1:/tmp/
+                        </code>
+                        <br/>
+                        <code>
+                            opkg update &amp;&amp; opkg install /tmp/fptn-client-*.ipk
+                        </code>
+                        <br/>
+                        <br/>
+
+                        <p>
+                            Во время установки роутеру нужен работающий интернет: <code>kmod-tun</code> и <code>ip-full</code> скачиваются из репозитория OpenWrt.
+                        </p>
+
+                        <p>
+                            Перейдите в <a target="_blank" href="https://t.me/fptn_bot">Telegram-бот</a> и сгенерируйте токен командой <code>/token</code>, затем скопируйте его.
+                            <img style="width: 100%; max-width: 400px" class="img-center" src="images/telegram_token_ru.png" alt="Settings"/>
+                        </p>
+
+                        <p>
+                            Откройте в веб-интерфейсе роутера раздел <code>VPN</code> → <code>FPTN</code>, вставьте токен в поле «Токен доступа», поставьте галку «Включено» и нажмите «Сохранить и применить» — сервис запустится сразу.
+                            <img style="width: 100%" class="img-center" src="images/openwrt/ru/status.png" alt="Status"/>
+                        </p>
+                    </div>
+                    <div class="toolbox-ad language-en">
+                        <h3>Installation and Setup</h3>
+
+                        <br/>
+
+                        <p>
+                            Pick the package by the OpenWrt branch and the router's package architecture. The router tells its architecture — on 25.12:
+                        </p>
+
+                        <code>
+                            apk --print-arch
+                        </code>
+                        <br/>
+                        <br/>
+
+                        <p>
+                            On 24.10 the architecture is the line with the largest number, for example <code>arch aarch64_cortex-a53 10</code>:
+                        </p>
+
+                        <code>
+                            opkg print-architecture
+                        </code>
+                        <br/>
+                        <br/>
+
+                        <p>
+                            Copy the package to the router and install it. On 25.12:
+                        </p>
+
+                        <code>
+                            scp fptn-client-*.apk root@192.168.1.1:/tmp/
+                        </code>
+                        <br/>
+                        <code>
+                            apk update &amp;&amp; apk add --allow-untrusted /tmp/fptn-client-*.apk
+                        </code>
+                        <br/>
+                        <br/>
+
+                        <p>
+                            On 24.10:
+                        </p>
+
+                        <code>
+                            scp fptn-client-*.ipk root@192.168.1.1:/tmp/
+                        </code>
+                        <br/>
+                        <code>
+                            opkg update &amp;&amp; opkg install /tmp/fptn-client-*.ipk
+                        </code>
+                        <br/>
+                        <br/>
+
+                        <p>
+                            The router needs working internet during installation: <code>kmod-tun</code> and <code>ip-full</code> are pulled from the OpenWrt repository.
+                        </p>
+
+                        <p>
+                            Go to the <a target="_blank" href="https://t.me/fptn_bot">Telegram bot</a> and generate a token by sending the <code>/token</code> command, then copy it.
+                            <img style="width: 100%; max-width: 400px" class="img-center" src="images/telegram_token_en.png" alt="Settings"/>
+                        </p>
+
+                        <p>
+                            Open <code>VPN</code> → <code>FPTN</code> in the router web interface, paste the token into the "Access token" field, tick "Enabled" and press "Save &amp; Apply" — the service starts right away.
+                            <img style="width: 100%" class="img-center" src="images/openwrt/en/status.png" alt="Status"/>
+                        </p>
+                    </div>
+                </div>
+
                 <div class="toolbox-ad shared-info language-ru">
                     <p>
                         А еще, можно легко превратить RaspberryPi/OrangePi в WiFi-точку доступа и установить на неё FPTN-клиент.
@@ -1007,6 +1180,7 @@
     const owner = 'fptn-project';
     const repo = 'fptn';
     const tag_name = '0.4.3'
+    const android_url = 'https://github.com/fptn-project/FptnClient-Android/releases/download/1.3.28.0/fptn-android-1.3.28.0-all-platforms-universal.apk'
 
     function openTab(tabName) {
         const tabs = document.getElementsByClassName('tablink');
@@ -1054,7 +1228,7 @@
                 url = `https://github.com/${owner}/${repo}/releases/latest`
                 break;
             case 'android_apk':
-                url = `https://storage.googleapis.com/fptn.org/APK/fptn-client.apk`
+                url = android_url
                 break;
             case 'google_play':
                 url = `https://play.google.com/store/apps/details?id=org.fptn.vpn`
@@ -1062,6 +1236,10 @@
             default:
         }
         window.open(url, '_blank').focus();
+    }
+
+    function downloadOpenWrt(branch, arch, ext) {
+        window.open(`https://github.com/${owner}/${repo}/releases/download/${tag_name}/fptn-client-${tag_name}-openwrt-${branch}-${arch}.${ext}`, '_blank').focus();
     }
 
     function copyAddress(el, address) {

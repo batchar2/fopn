@@ -100,7 +100,7 @@ class MaskingFormatter : public spdlog::formatter {
   std::unique_ptr<spdlog::pattern_formatter> inner_;
 };
 
-inline bool init(const std::string& app_name) {
+inline bool init(const std::string& app_name, bool mask_ip_addresses = true) {
   // Set locale
 #ifdef _WIN32
   SetConsoleOutputCP(CP_UTF8);
@@ -177,7 +177,12 @@ inline bool init(const std::string& app_name) {
 
     spdlog::set_default_logger(logger);
     spdlog::set_level(spdlog::level::info);
-    spdlog::set_formatter(std::make_unique<MaskingFormatter>());
+    if (mask_ip_addresses) {
+      spdlog::set_formatter(std::make_unique<MaskingFormatter>());
+    } else {
+      spdlog::set_formatter(
+          std::make_unique<spdlog::pattern_formatter>(kLogPattern));
+    }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
     SPDLOG_INFO("Logger initialized for iOS - console output only");

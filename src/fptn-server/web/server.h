@@ -38,7 +38,6 @@ class Server final {
       fptn::common::network::IPv4Address dns_server_ipv4,
       fptn::common::network::IPv6Address dns_server_ipv6,
       bool enable_detect_probing,
-      std::string default_proxy_domain,
       std::vector<std::string> allowed_sni_list,
       std::size_t max_active_sessions_per_user,
       std::string server_external_ips,
@@ -87,7 +86,6 @@ class Server final {
   const fptn::common::network::IPv4Address dns_server_ipv4_;
   const fptn::common::network::IPv6Address dns_server_ipv6_;
   const bool enable_detect_probing_;
-  const std::string default_proxy_domain_;
   const std::vector<std::string> allowed_sni_list_;
 
   const std::size_t max_active_sessions_per_user_;

@@ -1,7 +1,7 @@
 services:
   fptn-server:
     restart: unless-stopped
-    image: fptnvpn/fptn-vpn-server:0.4.4
+    image: fptnvpn/fptn-vpn-server:latest
     privileged: true
     cap_add:
       - NET_ADMIN
@@ -32,7 +32,6 @@ services:
       - ./fptn-server-data:/etc/fptn
     environment:
       - ENABLE_DETECT_PROBING=${ENABLE_DETECT_PROBING}
-      - DEFAULT_PROXY_DOMAIN=${DEFAULT_PROXY_DOMAIN}
       - ALLOWED_SNI_LIST=${ALLOWED_SNI_LIST}
       - ENABLE_DOMAIN_BLACKLIST_FILTER=${ENABLE_DOMAIN_BLACKLIST_FILTER:-true}
       - DOMAIN_BLACKLIST_URLS=${DOMAIN_BLACKLIST_URLS:-}
@@ -47,7 +46,7 @@ services:
       - REMOTE_SERVER_AUTH_PORT=${REMOTE_SERVER_AUTH_PORT}
       - MAX_ACTIVE_SESSIONS_PER_USER=${MAX_ACTIVE_SESSIONS_PER_USER}
       - SERVER_EXTERNAL_IPS=${SERVER_EXTERNAL_IPS}
-      - MTU_SIZE=1400
+      - MTU_SIZE=${MTU_SIZE:-1400}
       - USING_DNS_SERVER=unbound
       - DNS_IPV6_ENABLE=${DNS_IPV6_ENABLE:-false}
       - DNS_IPV4_PRIMARY=${DNS_IPV4_PRIMARY:-8.8.8.8}

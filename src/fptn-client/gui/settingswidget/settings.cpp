@@ -875,7 +875,9 @@ void SettingsWidget::SetupUi() {
       "  - charlie b.<br>"
       "  - alex_pol<br>"
       "  - Vox<br>"
-      "  - Rucozhop4ik<br>";
+      "  - Rucozhop4ik<br>"
+      "  - Nigmast<br>"
+      "  - DayZ_LIDER<br>";
 
   sponsors_names_label_ = new QLabel(sponsors_list, this);
   sponsors_names_label_->setAlignment(Qt::AlignLeft);

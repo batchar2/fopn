@@ -347,11 +347,17 @@ jobs:
         shell: powershell
         run: |
           docker run --rm -v "$($PWD.Path):/dst" "fptn-openwrt-${{ matrix.target }}-${{ matrix.version }}" cp -av /out/. /dst/
-      - name: Upload package RELEASE
-        if: github.event_name == 'release'
+      - name: Upload apk RELEASE
+        if: github.event_name == 'release' && matrix.version == '25.12.5'
         uses: AButler/upload-release-assets@v3.0
         with:
-          files: "fptn-client-*.apk,fptn-client-*.ipk"
+          files: "fptn-client-*.apk"
+          repo-token: ${{ secrets.CI_TOKEN }}
+      - name: Upload ipk RELEASE
+        if: github.event_name == 'release' && matrix.version == '24.10.7'
+        uses: AButler/upload-release-assets@v3.0
+        with:
+          files: "fptn-client-*.ipk"
           repo-token: ${{ secrets.CI_TOKEN }}
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -429,6 +435,19 @@ jobs:
           sed -i -E "s|(<span id=\"version\">)[^<]*(</span>)|\1${VERSION}\2|" docs/index.html docs/index-ru.html
           sed -i -E "s|(const tag_name = ')[^']*(')|\1${VERSION}\2|" docs/index.html docs/index-ru.html
           grep -n 'id="version"\|const tag_name' docs/index.html docs/index-ru.html
+
+      - name: Set Android link in docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ANDROID_URL=$(gh api repos/fptn-project/FptnClient-Android/releases/latest --jq '.assets[] | select(.name | endswith("-all-platforms-universal.apk")) | .browser_download_url')
+          if [ -z "$ANDROID_URL" ]; then
+            echo "No Android apk found"
+            exit 1
+          fi
+          echo "Android link: $ANDROID_URL"
+          sed -i -E "s|(const android_url = ')[^']*(')|\1${ANDROID_URL}\2|" docs/index.html docs/index-ru.html
+          grep -n 'const android_url' docs/index.html docs/index-ru.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
