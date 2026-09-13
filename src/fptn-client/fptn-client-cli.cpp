@@ -70,6 +70,10 @@ int main(int argc, char* argv[]) {
     // Required arguments
     args.add_argument("--access-token").required().help("Access token");
     // Optional arguments
+    args.add_argument("--list-servers")
+        .default_value(false)
+        .implicit_value(true)
+        .help("List available server and exit");
     args.add_argument("--out-network-interface")
         .default_value("")
         .help("Network out interface");
@@ -451,6 +455,14 @@ int main(int argc, char* argv[]) {
     std::string pre_obtained_token;
     try {
       config.Parse();
+      
+      if (args.get<bool>("--list-servers")) {
+          for (const auto& server : config.GetServers()) {
+              std::cout << server.name << " (" << server.host << ")" << std::endl;
+          }
+          return EXIT_SUCCESS;
+      }
+      
       bool use_login_race = preferred_server.empty();
       if (!preferred_server.empty()) {
         auto server_opt = config.GetServer(preferred_server);
@@ -462,6 +474,7 @@ int main(int argc, char* argv[]) {
           use_login_race = true;
         }
       }
+      
       if (use_login_race) {
         auto login_result = config.FindServerByLogin(10);
         if (!login_result) {
