@@ -18,6 +18,8 @@ tmp/
 keys/
 build*/
 cmake-build-*/
+__pycache__/
+*.pyc
 .idea/
 libhv.*
 macos-build/
