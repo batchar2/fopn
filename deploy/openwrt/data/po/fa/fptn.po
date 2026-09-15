@@ -348,3 +348,15 @@ msgstr ""
 
 msgid "Re-measure every server in the pool every N seconds. 0 keeps only the reading taken at startup, so a server that was down at launch stays marked dead."
 msgstr ""
+
+msgid "FPTN on this router is run by ZeroBlock (section: %s)."
+msgstr ""
+
+msgid "The settings on this page are not used. Access tokens, server selection and every other option are set in the ZeroBlock section. This page only matters when FPTN runs on its own, without ZeroBlock."
+msgstr ""
+
+msgid "Open ZeroBlock"
+msgstr ""
+
+msgid "Package version: %s"
+msgstr ""

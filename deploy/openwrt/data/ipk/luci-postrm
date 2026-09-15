@@ -1,0 +1,9 @@
+#!/bin/sh
+
+[ -n "$IPKG_INSTROOT" ] && exit 0
+
+# The files are gone by now; drop the cached menu entry and ACL as well.
+rm -f /tmp/luci-indexcache* /tmp/luci-modulecache/* 2>/dev/null
+/etc/init.d/rpcd restart >/dev/null 2>&1
+
+exit 0

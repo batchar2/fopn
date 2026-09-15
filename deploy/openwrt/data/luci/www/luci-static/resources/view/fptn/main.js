@@ -52,6 +52,47 @@ function serviceInfo() {
 	});
 }
 
+// Секции ZeroBlock, которые сами запускают FPTN. Тогда эта страница не
+// участвует: ZeroBlock поднимает клиент со своим конфигом и держит
+// fptn.config.enabled выключенным, а правки здесь только путают.
+function zeroblockSections() {
+	return uci.load('zeroblock').then(function () {
+		return uci.sections('zeroblock', 'section').filter(function (s) {
+			return s.enabled !== '0' && (s.proxy_config_type === 'fptn' ||
+				s.failover_fptn_access_token != null);
+		}).map(function (s) {
+			return s['.name'];
+		});
+	}).catch(function () {
+		return [];
+	});
+}
+
+function managedPage(view, sections) {
+	view.handleSaveApply = null;
+	view.handleSave = null;
+	view.handleReset = null;
+
+	return E('div', { 'class': 'cbi-map' }, [
+		E('h2', {}, 'FPTN VPN'),
+		E('div', { 'class': 'alert-message warning' }, [
+			E('p', {}, E('strong', {},
+				_('FPTN on this router is run by ZeroBlock (section: %s).')
+					.format(sections.join(', ')))),
+			E('p', {}, _('The settings on this page are not used. Access ' +
+				'tokens, server selection and every other option are set in the ' +
+				'ZeroBlock section. This page only matters when FPTN runs on its ' +
+				'own, without ZeroBlock.')),
+			E('p', {}, E('a', {
+				'class': 'btn cbi-button cbi-button-action',
+				'href': L.url('admin', 'services', 'zeroblock')
+			}, _('Open ZeroBlock')))
+		]),
+		E('p', { 'style': 'opacity:.7' },
+			_('Package version: %s').format(packageVersion))
+	]);
+}
+
 function isRunning() {
 	return serviceInfo().then(function (info) {
 		return info.running;
@@ -585,13 +626,17 @@ return view.extend({
 
 			return Promise.all([
 				serviceInfo(), hasTunnel(), readLog(), tunnelStats(tun),
-				import(L.resource('fptn/brotli.js'))
+				import(L.resource('fptn/brotli.js')), zeroblockSections()
 			]);
 		});
 	},
 
 	render: function (data) {
 		var m, s, o;
+
+		if (data[5] && data[5].length)
+			return managedPage(this, data[5]);
+
 		var running = data[0].running;
 		var state = describe(running, data[1]);
 

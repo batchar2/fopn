@@ -348,3 +348,15 @@ msgstr "Интервал перезамера"
 
 msgid "Re-measure every server in the pool every N seconds. 0 keeps only the reading taken at startup, so a server that was down at launch stays marked dead."
 msgstr "Перемерять каждый сервер пула каждые N секунд. 0 — остаётся только замер при старте, поэтому сервер, лежавший на запуске, так и останется помеченным мёртвым."
+
+msgid "FPTN on this router is run by ZeroBlock (section: %s)."
+msgstr "FPTN на этом роутере запускает ZeroBlock (секция: %s)."
+
+msgid "The settings on this page are not used. Access tokens, server selection and every other option are set in the ZeroBlock section. This page only matters when FPTN runs on its own, without ZeroBlock."
+msgstr "Настройки на этой странице не используются. Токены, выбор сервера и все остальные параметры задаются в секции ZeroBlock. Эта страница нужна, только когда FPTN работает сам, без ZeroBlock."
+
+msgid "Open ZeroBlock"
+msgstr "Открыть ZeroBlock"
+
+msgid "Package version: %s"
+msgstr "Версия пакета: %s"

@@ -415,6 +415,12 @@ A single `option access_token` from earlier versions is understood as well.
 When ZeroBlock runs the client, this service is not used: the daemon starts
 `/usr/bin/fptn-client-cli` itself and passes the parameters as arguments.
 
+Since 0.4.26 the web page is a separate package, `luci-app-fptn`
+(`luci-app-fptn-<version>-openwrt-24.10.x-all.ipk`, `-noarch.apk` on 25.12).
+`fptn-client` no longer carries it, so a router where ZeroBlock installs the
+client gets no second settings page. When the page is installed anyway and a
+ZeroBlock section runs FPTN, it shows that notice instead of the form.
+
 ## Behaviour on a router worth knowing about
 
 **Logging.** On OpenWrt it goes to two files of one megabyte with rotation —

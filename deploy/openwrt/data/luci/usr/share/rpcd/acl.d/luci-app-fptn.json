@@ -2,7 +2,7 @@
 	"luci-app-fptn": {
 		"description": "Grant access to the FPTN client configuration",
 		"read": {
-			"uci": [ "fptn", "firewall", "dhcp" ],
+			"uci": [ "fptn", "firewall", "dhcp", "zeroblock" ],
 			"ubus": {
 				"service": [ "list" ]
 			},
