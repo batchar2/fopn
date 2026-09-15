@@ -8,6 +8,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -43,15 +44,38 @@ class VpnManager final {
 
   bool Start();
   bool Stop();
+
+  // Swap the server without bringing the tunnel up again: the TUN device is
+  // already open and the routes are applied, only the far end changes.
+  // Switching used to mean leaving the process - procd started the client
+  // again, and it came back on the very same server.
+  //
+  // Takes a factory rather than a ready connection: the login to the new
+  // server has to happen after the current session is released, otherwise a
+  // server that counts sessions per user refuses it. If the factory returns
+  // nothing, the previous connection is brought back up.
+  bool SwitchClient(
+      const std::function<fptn::vpn::http::ClientPtr()>& make_client);
   std::size_t GetSendRate();
   std::size_t GetReceiveRate();
   bool IsStarted();
+
+  // The packet counters were always maintained, but had no getters - the
+  // numbers piled up and nobody could read them.
+  std::uint64_t ToServerSent() const noexcept { return to_server_sent_.load(); }
+  std::uint64_t ToServerDropped() const noexcept {
+    return to_server_dropped_.load();
+  }
+  std::uint64_t ToTunSent() const noexcept { return to_tun_sent_.load(); }
+  std::uint64_t ToTunDropped() const noexcept { return to_tun_dropped_.load(); }
   bool IsReconnecting() const;
   int ReconnectAttempt() const;
   int MaxReconnectAttempts() const;
   [[nodiscard]] std::string GetInterfaceName() const;
 
  protected:
+  [[nodiscard]] bool IsClientStarted() const;
+  [[nodiscard]] bool IsClientConnected() const;
   void ProcessWebSocketPackets();
   void Supervise();
 
@@ -69,6 +93,9 @@ class VpnManager final {
   std::atomic<bool> ever_connected_;
   std::atomic<bool> gave_up_;
   std::atomic<bool> reconnecting_;
+  // A server switch is in progress: there is no connection at this moment,
+  // but it must not count as a drop - the main loop would end the process.
+  std::atomic<bool> switching_{false};
   std::atomic<int> reconnect_attempt_;
 
   std::atomic<std::size_t> last_send_rate_{0};

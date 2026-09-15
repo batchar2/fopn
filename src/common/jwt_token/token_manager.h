@@ -6,6 +6,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #pragma once
 
+#include <cstdint>
 #include <chrono>
 #include <fstream>
 #include <memory>
@@ -30,7 +31,7 @@ class TokenManager {
         server_key_(ReadFromFile(server_key_path_)) {}
 
   [[nodiscard]] std::pair<std::string, std::string> Generate(
-      const std::string& username, int bandwidth_bit) const noexcept {
+      const std::string& username, std::int64_t bandwidth_bit) const noexcept {
     const auto now = std::chrono::system_clock::now();
     // CHECK JWT
     const auto access_token =

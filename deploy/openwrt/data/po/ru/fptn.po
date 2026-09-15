@@ -297,3 +297,66 @@ msgstr "Туннель передает трафик в обе стороны"
 
 msgid "sent %s, received %s"
 msgstr "отправлено %s, получено %s"
+
+msgid "%d keys configured"
+msgstr "настроено ключей: %d"
+
+msgid "There are unsaved changes. The checks below look at the applied configuration — press \"Save & Apply\""
+msgstr "Есть несохранённые изменения. Проверки ниже смотрят на применённую конфигурацию — нажмите «Сохранить и применить»"
+
+msgid "Got keys from several services? Put each on its own line."
+msgstr "Ключи от нескольких сервисов? Каждый — на своей строке."
+
+msgid "Access tokens"
+msgstr "Токены доступа"
+
+msgid "Token issued by %s in Telegram. It carries the server list, so get a new one when the current token expires. One key per line - the servers of every key are tried together, and the client connects to whichever answers first."
+msgstr "Токен выдаёт %s в Telegram. В нём лежит список серверов, поэтому по истечении срока нужен новый. Один ключ на строку — серверы всех ключей опрашиваются вместе, и клиент подключается к тому, кто ответит первым."
+
+msgid "A token is damaged or not copied completely — copy it again from @fptn_bot"
+msgstr "Один из токенов повреждён или скопирован не полностью — скопируйте его заново из @fptn_bot"
+
+msgid "Server from the access tokens to connect to. \"Auto\" logs in to every server at once and keeps the one that answers first. A name that appears in more than one key is offered qualified with its service: \"MyService/Server-1\"."
+msgstr "Сервер из токенов, к которому подключаться. «Авто» — вход сразу на все серверы, остаётся тот, кто ответит первым. Имя, встречающееся в нескольких ключах, предлагается с уточнением сервиса: «MyService/Server-1»."
+
+msgid "Latency limit, ms"
+msgstr "Предел задержки, мс"
+
+msgid "A server slower than this is not picked, and the one in use is replaced once it stays over the limit. Empty or 0 - no limit."
+msgstr "Сервер медленнее этого не выбирается, а текущий заменяется, если держится выше предела. Пусто или 0 — без ограничения."
+
+msgid "SOCKS session limit"
+msgstr "Предел сессий SOCKS"
+
+msgid "Cap on simultaneous SOCKS sessions. Empty derives it from the file descriptor limit: two per session plus headroom."
+msgstr "Потолок одновременных сессий SOCKS. Пусто — выводится из лимита файловых дескрипторов: по два на сессию плюс запас."
+
+msgid "Status API address"
+msgstr "Адрес статус-API"
+
+msgid "Serve an HTTP API with the server pool and their latency, for example 127.0.0.1:9091. Anything but the loopback needs a token below - the client refuses to start otherwise, because the pool, the latency probe and the server switch would be open to the whole network."
+msgstr "Отдавать HTTP-API с пулом серверов и их задержками, например 127.0.0.1:9091. Для любого адреса кроме петли нужен токен ниже — иначе клиент не запустится, потому что пул, замер задержки и переключение сервера оказались бы открыты всей сети."
+
+msgid "Status API token"
+msgstr "Токен статус-API"
+
+msgid "Requests must carry Authorization: Bearer <token>. Empty means no check, and then the address above may only be the loopback. Required to reach the API from another host."
+msgstr "Запросы должны нести Authorization: Bearer <токен>. Пусто — без проверки, и тогда адрес выше может быть только петлёй. Обязателен для доступа к API с другой машины."
+
+msgid "Re-measure interval"
+msgstr "Интервал перезамера"
+
+msgid "Re-measure every server in the pool every N seconds. 0 keeps only the reading taken at startup, so a server that was down at launch stays marked dead."
+msgstr "Перемерять каждый сервер пула каждые N секунд. 0 — остаётся только замер при старте, поэтому сервер, лежавший на запуске, так и останется помеченным мёртвым."
+
+msgid "FPTN on this router is run by ZeroBlock (section: %s)."
+msgstr "FPTN на этом роутере запускает ZeroBlock (секция: %s)."
+
+msgid "The settings on this page are not used. Access tokens, server selection and every other option are set in the ZeroBlock section. This page only matters when FPTN runs on its own, without ZeroBlock."
+msgstr "Настройки на этой странице не используются. Токены, выбор сервера и все остальные параметры задаются в секции ZeroBlock. Эта страница нужна, только когда FPTN работает сам, без ZeroBlock."
+
+msgid "Open ZeroBlock"
+msgstr "Открыть ZeroBlock"
+
+msgid "Package version: %s"
+msgstr "Версия пакета: %s"

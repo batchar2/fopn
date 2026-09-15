@@ -1,8 +1,9 @@
 find_package(GTest REQUIRED)
+find_package(Threads REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
 find_package(ZLIB REQUIRED)
-find_package(Boost REQUIRED COMPONENTS random filesystem locale)
+find_package(Boost REQUIRED COMPONENTS random filesystem locale process)
 
 set(FPTN_CLIENT_DIR "${CMAKE_SOURCE_DIR}/src/fptn-client")
 
@@ -29,6 +30,17 @@ target_include_directories(SplitTunnelingTest PRIVATE "${FPTN_CLIENT_DIR}")
 target_link_libraries(SplitTunnelingTest PRIVATE ${LIBS} Boost::locale)
 add_test(NAME SplitTunnelingTest COMMAND SplitTunnelingTest)
 
+# --- SOCKS5 server test ---
+add_executable(Socks5ServerTest
+  socks/Socks5ServerTest.cpp
+  "${FPTN_CLIENT_DIR}/socks/socks5_server.cpp"
+  "${FPTN_CLIENT_DIR}/socks/udp_associate.cpp")
+target_include_directories(Socks5ServerTest PRIVATE "${FPTN_CLIENT_DIR}")
+# PolicyRoute shells out to system commands, hence Boost::process.
+target_link_libraries(Socks5ServerTest PRIVATE ${LIBS} Boost::process
+                                               Threads::Threads)
+add_test(NAME Socks5ServerTest COMMAND Socks5ServerTest)
+
 # --- DomainBlacklist SNI match test ---
 find_package(re2 REQUIRED)
 add_executable(DomainBlacklistMatchTest blacklist/DomainBlacklistMatchTest.cpp)
@@ -36,3 +48,28 @@ target_include_directories(DomainBlacklistMatchTest PRIVATE "${FPTN_CLIENT_DIR}"
 target_link_libraries(
   DomainBlacklistMatchTest PRIVATE ${LIBS} Boost::locale re2::re2)
 add_test(NAME DomainBlacklistMatchTest COMMAND DomainBlacklistMatchTest)
+
+# --- Status API server test ---
+add_executable(StatusServerTest
+  status/StatusServerTest.cpp
+  "${FPTN_CLIENT_DIR}/status/status_server.cpp"
+  "${FPTN_CLIENT_DIR}/status/server_registry.cpp")
+target_include_directories(StatusServerTest PRIVATE "${FPTN_CLIENT_DIR}")
+target_link_libraries(StatusServerTest PRIVATE ${LIBS} Threads::Threads)
+add_test(NAME StatusServerTest COMMAND StatusServerTest)
+
+# --- State store test ---
+add_executable(StateStoreTest
+  status/StateStoreTest.cpp
+  "${FPTN_CLIENT_DIR}/status/state_store.cpp")
+target_include_directories(StateStoreTest PRIVATE "${FPTN_CLIENT_DIR}")
+target_link_libraries(StateStoreTest PRIVATE ${LIBS} Threads::Threads)
+add_test(NAME StateStoreTest COMMAND StateStoreTest)
+
+# --- Server registry test ---
+add_executable(ServerRegistryTest
+  status/ServerRegistryTest.cpp
+  "${FPTN_CLIENT_DIR}/status/server_registry.cpp")
+target_include_directories(ServerRegistryTest PRIVATE "${FPTN_CLIENT_DIR}")
+target_link_libraries(ServerRegistryTest PRIVATE ${LIBS} Threads::Threads)
+add_test(NAME ServerRegistryTest COMMAND ServerRegistryTest)

@@ -2,15 +2,14 @@
 	"luci-app-fptn": {
 		"description": "Grant access to the FPTN client configuration",
 		"read": {
-			"uci": [ "fptn", "firewall", "dhcp" ],
+			"uci": [ "fptn", "firewall", "dhcp", "zeroblock" ],
 			"ubus": {
 				"service": [ "list" ]
 			},
 			"file": {
 				"/sbin/logread": [ "exec" ],
 				"/sbin/ip": [ "exec" ],
-				"/bin/ping": [ "exec" ],
-				"/var/log/fptn/fptn-client-cli.log": [ "read" ]
+				"/bin/ping": [ "exec" ]
 			}
 		},
 		"write": {

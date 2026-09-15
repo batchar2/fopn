@@ -177,9 +177,18 @@ scp fptn-client-*.ipk root@192.168.1.1:/tmp/
 opkg update && opkg install /tmp/fptn-client-*.ipk
 ```
 
+The web page is a separate package, `luci-app-fptn`, one file for every architecture (`luci-app-fptn-<version>-openwrt-<branch>-all.ipk` or `-noarch.apk`). Install it after the client:
+
+```bash
+opkg install /tmp/luci-app-fptn-*.ipk      # 24.10
+apk add --allow-untrusted /tmp/luci-app-fptn-*.apk   # 25.12
+```
+
+Skip it when FPTN is run by ZeroBlock: ZeroBlock starts the client with its own configuration, and a second settings page only confuses. Upgrading from 0.4.25 or earlier, where the page lived inside `fptn-client`, upgrade the client first and install `luci-app-fptn` afterwards — the other way round opkg reports the files as belonging to both packages.
+
 The router needs working internet during installation: `kmod-tun` and `ip-full` are pulled from the OpenWrt repository.
 
-Installing sets up everything else on its own: it creates the firewall zone that masquerades LAN traffic into the tunnel, enables the service for boot, and reloads `rpcd` so the web page appears.
+Installing sets up everything else on its own: it creates the firewall zone that masquerades LAN traffic into the tunnel, enables the service for boot, and `luci-app-fptn` reloads `rpcd` so the web page appears.
 
 Open `VPN` → `FPTN` in the router web interface, paste the access token from [@fptn_bot](https://t.me/fptn_bot), tick `Enabled` and press `Save & Apply` — the service starts right there. The same from the shell:
 

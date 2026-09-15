@@ -25,6 +25,19 @@ if [ ! -x "$IPKG_BUILD" ]; then
     exit 1
 fi
 
+# <staging dir> <package name> <output file>
+build_ipk() {
+    local output_dir
+    output_dir=$(mktemp -d -t fptn-ipk-XXXXXX)
+    "$IPKG_BUILD" -c "$1" "$output_dir"
+    mv "$output_dir/$2"_*.ipk "$3"
+    rm -rf "$1" "$output_dir"
+}
+
+# fptn-client: the binary, the procd service and the UCI config. The LuCI page
+# is a package of its own below: when ZeroBlock runs the client, a second
+# settings page that nothing reads only confuses people.
+
 CLIENT_TMP_DIR=$(mktemp -d -t fptn-client-cli-XXXXXX)
 
 mkdir -p "$CLIENT_TMP_DIR/usr/bin"
@@ -37,16 +50,6 @@ cp -a "$SHARED_DIR/files/etc" "$CLIENT_TMP_DIR/"
 chmod 755 "$CLIENT_TMP_DIR/etc/init.d/fptn"
 chmod 755 "$CLIENT_TMP_DIR/etc/uci-defaults/99-fptn"
 chmod 644 "$CLIENT_TMP_DIR/etc/config/fptn"
-
-cp -a "$SHARED_DIR/luci/." "$CLIENT_TMP_DIR/"
-sed -i "s/@FPTN_VERSION@/${VERSION}/" "$CLIENT_TMP_DIR/www/luci-static/resources/view/fptn/main.js"
-find "$CLIENT_TMP_DIR/usr/share/luci" "$CLIENT_TMP_DIR/usr/share/rpcd" "$CLIENT_TMP_DIR/www" -type d -exec chmod 755 {} +
-find "$CLIENT_TMP_DIR/usr/share/luci" "$CLIENT_TMP_DIR/usr/share/rpcd" "$CLIENT_TMP_DIR/www" -type f -exec chmod 644 {} +
-
-mkdir -p "$CLIENT_TMP_DIR/usr/lib/lua/luci/i18n"
-for po in "$SHARED_DIR"/po/*/fptn.po; do
-    po2lmo "$po" "$CLIENT_TMP_DIR/usr/lib/lua/luci/i18n/fptn.$(basename "$(dirname "$po")").lmo"
-done
 
 mkdir -p "$CLIENT_TMP_DIR/CONTROL"
 
@@ -68,13 +71,47 @@ cp "$SCRIPT_DIR/prerm" "$CLIENT_TMP_DIR/CONTROL/prerm"
 chmod 755 "$CLIENT_TMP_DIR/CONTROL/postinst" "$CLIENT_TMP_DIR/CONTROL/prerm"
 chmod 644 "$CLIENT_TMP_DIR/CONTROL/control" "$CLIENT_TMP_DIR/CONTROL/conffiles"
 
-OUTPUT_DIR=$(mktemp -d -t fptn-client-ipk-XXXXXX)
-
-"$IPKG_BUILD" -c "$CLIENT_TMP_DIR" "$OUTPUT_DIR"
-
-mv "$OUTPUT_DIR"/fptn-client_*.ipk \
+build_ipk "$CLIENT_TMP_DIR" fptn-client \
     "fptn-client-${VERSION}-openwrt-${OPENWRT_VERSION}-${ARCH}.ipk"
 
-rm -rf "$CLIENT_TMP_DIR" "$OUTPUT_DIR"
-
 echo "Client ipk package created successfully."
+
+# luci-app-fptn: the web page, its translations and the rpcd ACL. Nothing in it
+# depends on the CPU, so it is built as "all" and the name stays clear of the
+# fptn-client-*-<arch>.ipk pattern ZeroBlock looks for in a release.
+
+LUCI_TMP_DIR=$(mktemp -d -t luci-app-fptn-XXXXXX)
+
+cp -a "$SHARED_DIR/luci/." "$LUCI_TMP_DIR/"
+sed -i "s/@FPTN_VERSION@/${VERSION}/" "$LUCI_TMP_DIR/www/luci-static/resources/view/fptn/main.js"
+find "$LUCI_TMP_DIR/usr/share/luci" "$LUCI_TMP_DIR/usr/share/rpcd" "$LUCI_TMP_DIR/www" -type d -exec chmod 755 {} +
+find "$LUCI_TMP_DIR/usr/share/luci" "$LUCI_TMP_DIR/usr/share/rpcd" "$LUCI_TMP_DIR/www" -type f -exec chmod 644 {} +
+
+mkdir -p "$LUCI_TMP_DIR/usr/lib/lua/luci/i18n"
+for po in "$SHARED_DIR"/po/*/fptn.po; do
+    po2lmo "$po" "$LUCI_TMP_DIR/usr/lib/lua/luci/i18n/fptn.$(basename "$(dirname "$po")").lmo"
+done
+
+mkdir -p "$LUCI_TMP_DIR/CONTROL"
+
+cat > "$LUCI_TMP_DIR/CONTROL/control" <<EOF
+Package: luci-app-fptn
+Version: ${VERSION}-r1
+Architecture: all
+Maintainer: FPTN Project <https://github.com/fptn-project/fptn>
+Section: luci
+Priority: optional
+License: MIT
+Depends: luci-base, fptn-client
+Description: LuCI page for the FPTN client
+EOF
+
+cp "$SCRIPT_DIR/luci-postinst" "$LUCI_TMP_DIR/CONTROL/postinst"
+cp "$SCRIPT_DIR/luci-postrm" "$LUCI_TMP_DIR/CONTROL/postrm"
+chmod 755 "$LUCI_TMP_DIR/CONTROL/postinst" "$LUCI_TMP_DIR/CONTROL/postrm"
+chmod 644 "$LUCI_TMP_DIR/CONTROL/control"
+
+build_ipk "$LUCI_TMP_DIR" luci-app-fptn \
+    "luci-app-fptn-${VERSION}-openwrt-${OPENWRT_VERSION}-all.ipk"
+
+echo "LuCI ipk package created successfully."

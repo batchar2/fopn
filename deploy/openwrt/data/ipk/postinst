@@ -2,9 +2,10 @@
 
 [ -n "$IPKG_INSTROOT" ] && exit 0
 
-if [ -f /etc/config/fptn-opkg ]; then
-	mv -f /etc/config/fptn-opkg /etc/config/fptn
-fi
+# opkg parks the packaged config at /etc/config/fptn-opkg only when the user
+# has edited theirs. Moving it over the live file drops their access token and
+# every setting they made, so leave both in place: unset options fall back to
+# the client's own defaults, and the new file is there to merge from.
 
 if [ -f /etc/uci-defaults/99-fptn ]; then
 	( . /etc/uci-defaults/99-fptn ) && rm -f /etc/uci-defaults/99-fptn

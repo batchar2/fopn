@@ -20,6 +20,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include "fptn-protocol-lib/https/api_client/api_client.h"
 #include "fptn-protocol-lib/https/obfuscator/methods/tls2/tls_obfuscator2.h"
+#include "fptn-protocol-lib/https/socket_options.h"
 #include "fptn-protocol-lib/protocol/yaff/yaff_serializer.h"
 
 #ifdef __APPLE__
@@ -212,10 +213,19 @@ void WebsocketClient::DoStop() {
       SPDLOG_INFO("Shutting down TCP socket...");
 
       auto& tcp = boost::beast::get_lowest_layer(ws_);
-      const boost::asio::socket_base::linger linger(true, 0);
-      tcp.socket().set_option(linger);
 
       if (tcp.socket().is_open()) {
+        // Only on a live socket, and only through the non-throwing
+        // overload: on a closed one set_option raises Bad file descriptor,
+        // which used to take the whole block with it - shutdown and close
+        // never ran, and the descriptor leaked for the life of the process.
+        const boost::asio::socket_base::linger linger(true, 0);
+        tcp.socket().set_option(linger, ec);
+        if (ec) {
+          SPDLOG_DEBUG("TCP linger option not applied: {}", ec.message());
+          ec.clear();
+        }
+
         tcp.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         if (ec && ec != boost::asio::error::not_connected) {
           SPDLOG_WARN("TCP socket shutdown error: {}", ec.message());
@@ -342,9 +352,41 @@ boost::asio::awaitable<bool> WebsocketClient::Connect() {
       co_return false;
     }
 
-    // TCP connect
-    co_await boost::beast::get_lowest_layer(ws_).async_connect(
-        results, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    // TCP connect. Unchanged unless a routing mark is configured: SO_MARK has
+    // to be applied before the SYN leaves, and a range connect reopens the
+    // socket per attempt, which would drop it.
+    if (fptn::protocol::https::GetRoutingMark() != 0) {
+      // Endpoints are walked by hand so the mark lands before every SYN, and
+      // every address is tried: a host with both A and AAAA records must keep
+      // its fallback. A socket that could not be opened is not connected
+      // unmarked - the tunnel traffic would then be routed back into the
+      // tunnel.
+      ec = boost::asio::error::host_not_found;
+      for (const auto& entry : results) {
+        auto& socket = boost::beast::get_lowest_layer(ws_).socket();
+        boost::system::error_code open_ec;
+        socket.open(entry.endpoint().protocol(), open_ec);
+        if (open_ec) {
+          SPDLOG_ERROR("Cannot open a marked socket for {}: {}",
+              config_.common.server_ip.ToString(), open_ec.message());
+          ec = open_ec;
+          // Keep going: a router with no IPv6 route fails to open the AAAA
+          // endpoint, and the IPv4 one behind it is exactly the fallback.
+          continue;
+        }
+        fptn::protocol::https::ApplyRoutingMark(socket.native_handle());
+        co_await boost::beast::get_lowest_layer(ws_).async_connect(entry.endpoint(),
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        if (!ec) {
+          break;
+        }
+        boost::system::error_code close_ec;
+        socket.close(close_ec);
+      }
+    } else {
+      co_await boost::beast::get_lowest_layer(ws_).async_connect(
+          results, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    }
     if (ec) {
       SPDLOG_ERROR("Connect error: {}", ec.message());
       co_return false;

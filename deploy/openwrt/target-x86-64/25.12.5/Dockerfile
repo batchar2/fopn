@@ -69,6 +69,7 @@ RUN conan install . \
       --profile:build=default \
       --profile:host=/tmp/openwrt.profile \
       -s:b compiler.cppstd=20 \
+      -c:b tools.build:jobs=${JOBS} \
       -o with_gui_client=False \
       -o openwrt=True
 

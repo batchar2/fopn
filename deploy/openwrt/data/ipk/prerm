@@ -2,7 +2,29 @@
 
 [ -n "$IPKG_INSTROOT" ] && exit 0
 
-/etc/init.d/fptn stop
-/etc/init.d/fptn disable
+# The service is normally not running here: ZeroBlock keeps its own helper and
+# forces fptn.config.enabled to 0. procd then answers the stop with
+# "Command failed: ubus call service delete ... (Not found)", which every
+# auto-install upgrade would print as if something went wrong.
+/etc/init.d/fptn stop >/dev/null 2>&1
+/etc/init.d/fptn disable >/dev/null 2>&1
+
+# uci-defaults/99-fptn adds a firewall zone for the tunnel and a lan->fptn
+# forwarding rule, and nothing used to take them back: removing the package
+# left a zone pointing at a device that no longer exists. Dropping them here is
+# safe on an upgrade too - postinst runs 99-fptn again, and that script only
+# creates what is missing.
+if uci -q get firewall.fptn >/dev/null 2>&1; then
+	while :; do
+		idx=$(uci show firewall 2>/dev/null |
+			sed -n "s/^firewall\.@forwarding\[\([0-9]*\)\]\.dest='fptn'$/\1/p" |
+			head -1)
+		[ -n "$idx" ] || break
+		uci -q delete "firewall.@forwarding[$idx]" || break
+	done
+	uci -q delete firewall.fptn
+	uci commit firewall
+	/etc/init.d/firewall reload >/dev/null 2>&1
+fi
 
 exit 0

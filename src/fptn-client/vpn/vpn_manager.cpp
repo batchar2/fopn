@@ -50,6 +50,9 @@ bool VpnManager::IsStarted() {
   if (gave_up_) {
     return false;
   }
+  if (switching_) {
+    return true;
+  }
   if (ever_connected_) {
     return true;
   }
@@ -128,6 +131,95 @@ bool VpnManager::Start() {
 
   supervisor_thread_ = std::thread(&VpnManager::Supervise, this);
 
+  return true;
+}
+
+bool VpnManager::IsClientStarted() const {
+  // The client can be swapped at runtime, so the pointer is read under the
+  // mutex - a full lock rather than try_lock. Under try_lock a busy mutex
+  // (packet sending holds it) looked like "the client is not running", and
+  // the supervisor started a full tunnel restart for no reason.
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return config_.http_client && config_.http_client->IsStarted();
+}
+
+bool VpnManager::IsClientConnected() const {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return config_.http_client && config_.http_client->IsConnected();
+}
+
+bool VpnManager::SwitchClient(
+    const std::function<fptn::vpn::http::ClientPtr()>& make_client) {
+  if (!make_client || !running_) {
+    return false;
+  }
+
+  // The flag keeps the main loop calm: while the switch is running the
+  // tunnel is formally disconnected, but this is not a drop.
+  switching_ = true;
+
+  const std::unique_lock<std::mutex> lock(mutex_);  // mutex
+
+  if (!running_ || !config_.http_client) {
+    switching_ = false;
+    return false;
+  }
+
+  SPDLOG_INFO("Switching the tunnel to another server");
+
+  // Release the session before logging in: the server may count sessions per
+  // user and would refuse a second concurrent login.
+  auto previous = std::move(config_.http_client);
+
+  fptn::vpn::http::ClientPtr client;
+  try {
+    // Stopping spins down threads and can throw too, so it is inside the
+    // guarded block: whatever fails, the pointer must not stay empty.
+    previous->Stop();
+    client = make_client();
+  } catch (const std::exception& ex) {
+    // The factory resolves DNS, allocates and logs in, so it can throw. If
+    // that escaped, http_client stayed empty for good: the packet paths went
+    // quiet, switching_ never cleared so IsStarted() kept answering "yes",
+    // and the supervisor dereferenced the null pointer.
+    SPDLOG_ERROR("Switch failed: {}", ex.what());
+  } catch (...) {  // NOLINT
+    SPDLOG_ERROR("Switch failed with an unknown error");
+  }
+
+  if (!client) {
+    SPDLOG_WARN("Switch failed, staying on the current server");
+    config_.http_client = std::move(previous);
+    try {
+      config_.http_client->Start();
+    } catch (const std::exception& ex) {
+      SPDLOG_ERROR("Could not bring the previous server back: {}", ex.what());
+    }
+    switching_ = false;
+    return false;
+  }
+
+  try {
+    config_.http_client = std::move(client);
+    // NOLINTNEXTLINE(modernize-avoid-bind)
+    config_.http_client->SetRecvBatchIPPacketCallback(
+        std::bind(&VpnManager::HandleOnPacketsFromWebSocket, this,
+            std::placeholders::_1));
+    config_.http_client->Start();
+  } catch (const std::exception& ex) {
+    SPDLOG_ERROR("Could not start the new server: {}", ex.what());
+    switching_ = false;
+    return false;
+  }
+
+  // Leave ever_connected_ alone: it means "the tunnel came up at least once",
+  // and switching servers does not undo that. Clearing it here would make
+  // IsStarted() answer "no" for the duration of the switch - the main loop
+  // reads that as a drop and ends the process.
+  reconnecting_ = false;
+  reconnect_attempt_ = 0;
+
+  switching_ = false;
   return true;
 }
 
@@ -223,6 +315,12 @@ std::size_t VpnManager::GetReceiveRate() {
 }
 
 std::string VpnManager::GetInterfaceName() const {
+  // try_to_lock, like the rate getters next door: the same mutex is held for
+  // the whole of a server switch, and the status API must not stall on it.
+  const std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    return {};
+  }
   if (config_.virtual_net_interface) {
     return config_.virtual_net_interface->Name();
   }
@@ -349,12 +447,12 @@ void VpnManager::Supervise() {
     {
       std::unique_lock<std::mutex> lock(reconnect_mutex_);
       reconnect_cv_.wait_for(lock, std::chrono::milliseconds(500),
-          [this]() { return !running_ || !config_.http_client->IsStarted(); });
+          [this]() { return !running_ || !IsClientStarted(); });
     }
     if (!running_) {
       break;
     }
-    if (config_.http_client->IsConnected()) {
+    if (IsClientConnected()) {
       ever_connected_ = true;
       full_restart_count = 0;
       reconnecting_ = false;
@@ -365,14 +463,16 @@ void VpnManager::Supervise() {
       reconnect_attempt_ = std::max(full_restart_count, 1);
       reconnecting_ = true;
     }
-    if (config_.http_client->IsStarted()) {
+    if (IsClientStarted()) {
       continue;
     }
 
     if (full_restart_count >= kMaxFullRestarts_) {
       SPDLOG_ERROR("VPN reconnection failed after {} full restarts. Giving up.",
           kMaxFullRestarts_);
-      config_.route_manager->Clean();
+      if (config_.route_manager) {
+        config_.route_manager->Clean();
+      }
       reconnecting_ = false;
       gave_up_ = true;
       break;
@@ -386,13 +486,22 @@ void VpnManager::Supervise() {
     {
       const std::unique_lock<std::mutex> lock(mutex_);  // mutex
 
+      if (!config_.http_client || !config_.virtual_net_interface) {
+        // Nothing left to supervise. Say so instead of quietly leaving a
+        // process that answers "running" with no tunnel behind it.
+        SPDLOG_ERROR("VPN client is gone, giving up");
+        gave_up_ = true;
+        break;
+      }
       config_.http_client->Stop();
       tun_name = config_.virtual_net_interface->Name();
     }
 
     // Unlocked: the route manager guards itself, and holding mutex_ across
     // seconds of netsh/powershell freezes both packet paths.
-    config_.route_manager->Clean();
+    if (config_.route_manager) {
+      config_.route_manager->Clean();
+    }
 
     {
       std::unique_lock<std::mutex> lock(reconnect_mutex_);
@@ -403,11 +512,18 @@ void VpnManager::Supervise() {
       break;
     }
 
-    config_.route_manager->Apply(tun_name);
+    if (config_.route_manager) {
+      config_.route_manager->Apply(tun_name);
+    }
 
     {
       const std::unique_lock<std::mutex> lock(mutex_);  // mutex
 
+      if (!config_.http_client) {
+        SPDLOG_ERROR("VPN client is gone, giving up");
+        gave_up_ = true;
+        break;
+      }
       config_.http_client->Start();
     }
   }

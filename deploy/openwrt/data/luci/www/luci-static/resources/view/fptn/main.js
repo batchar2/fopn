@@ -41,7 +41,8 @@ var callServiceList = rpc.declare({
 function serviceInfo() {
 	return callServiceList('fptn').then(function (res) {
 		try {
-			var instance = res['fptn']['instances']['instance1'];
+			var instance = res['fptn']['instances']['fptn'] ||
+			                res['fptn']['instances']['instance1'];
 			return { running: instance['running'] === true, pid: instance['pid'] };
 		} catch (e) {
 			return { running: false };
@@ -51,13 +52,54 @@ function serviceInfo() {
 	});
 }
 
+// Секции ZeroBlock, которые сами запускают FPTN. Тогда эта страница не
+// участвует: ZeroBlock поднимает клиент со своим конфигом и держит
+// fptn.config.enabled выключенным, а правки здесь только путают.
+function zeroblockSections() {
+	return uci.load('zeroblock').then(function () {
+		return uci.sections('zeroblock', 'section').filter(function (s) {
+			return s.enabled !== '0' && (s.proxy_config_type === 'fptn' ||
+				s.failover_fptn_access_token != null);
+		}).map(function (s) {
+			return s['.name'];
+		});
+	}).catch(function () {
+		return [];
+	});
+}
+
+function managedPage(view, sections) {
+	view.handleSaveApply = null;
+	view.handleSave = null;
+	view.handleReset = null;
+
+	return E('div', { 'class': 'cbi-map' }, [
+		E('h2', {}, 'FPTN VPN'),
+		E('div', { 'class': 'alert-message warning' }, [
+			E('p', {}, E('strong', {},
+				_('FPTN on this router is run by ZeroBlock (section: %s).')
+					.format(sections.join(', ')))),
+			E('p', {}, _('The settings on this page are not used. Access ' +
+				'tokens, server selection and every other option are set in the ' +
+				'ZeroBlock section. This page only matters when FPTN runs on its ' +
+				'own, without ZeroBlock.')),
+			E('p', {}, E('a', {
+				'class': 'btn cbi-button cbi-button-action',
+				'href': L.url('admin', 'services', 'zeroblock')
+			}, _('Open ZeroBlock')))
+		]),
+		E('p', { 'style': 'opacity:.7' },
+			_('Package version: %s').format(packageVersion))
+	]);
+}
+
 function isRunning() {
 	return serviceInfo().then(function (info) {
 		return info.running;
 	});
 }
 
-function tokenServers(token) {
+function parseToken(token) {
 	try {
 		var text = token.replace(/[\s=]/g, '');
 		var brotli = /^fptnb(:|\/\/)/.test(text);
@@ -80,12 +122,52 @@ function tokenServers(token) {
 					typeof server.md5_fingerprint === 'string';
 			});
 
-		return valid ? config.servers.map(function (server) {
-			return server.name;
-		}) : null;
+		return valid ? config : null;
 	} catch (e) {
 		return null;
 	}
+}
+
+function tokenServers(token) {
+	var config = parseToken(token);
+
+	return config ? config.servers.map(function (server) {
+		return server.name;
+	}) : null;
+}
+
+// Имена серверов по всем ключам в поле. null, если хотя бы один не разбирается.
+// Имя, встречающееся в нескольких сервисах, уточняется сервисом - ровно так его
+// понимает --preferred-server.
+function tokenServerNames(value) {
+	var tokens = String(value || '').split(/\s+/)
+		.map(function (item) { return item.trim(); })
+		.filter(function (item) { return item.length > 0; });
+	var seen = {};
+	var entries = [];
+
+	for (var i = 0; i < tokens.length; i++) {
+		var config = parseToken(tokens[i]);
+
+		if (!config)
+			return null;
+
+		config.servers.forEach(function (server) {
+			entries.push({ service: config.service_name, name: server.name });
+			seen[server.name] = (seen[server.name] || 0) + 1;
+		});
+	}
+
+	var names = [];
+	entries.forEach(function (entry) {
+		var name = seen[entry.name] > 1
+			? entry.service + '/' + entry.name : entry.name;
+
+		if (names.indexOf(name) < 0)
+			names.push(name);
+	});
+
+	return names;
 }
 
 function tunnelStats(name) {
@@ -190,6 +272,10 @@ function compareVersions(left, right) {
 }
 
 function checkUpdate() {
+	// Checking from the admin's browser leaks the request outside and hangs
+	// where GitHub is blocked; the router itself knows better when to look.
+	if (!uci.get('fptn', 'config', 'check_updates'))
+		return Promise.resolve(null);
 	return fetch('https://api.github.com/repos/fptn-project/fptn/releases/latest')
 		.then(function (res) {
 			return res.json();
@@ -203,6 +289,17 @@ function checkUpdate() {
 		.catch(function () {
 			return null;
 		});
+}
+
+// Ключей может быть несколько: UCI хранит их списком, а конфиг прежних версий -
+// одиночным option. Отсюда всегда выходит массив.
+function accessTokens() {
+	var value = uci.get('fptn', 'config', 'access_token');
+	if (value == null)
+		return [];
+	return (Array.isArray(value) ? value : String(value).split(/\s+/))
+		.map(function (item) { return String(item).trim(); })
+		.filter(function (item) { return item.length > 0; });
 }
 
 function diagnose() {
@@ -264,10 +361,12 @@ function diagnose() {
 
 		return [
 			{
-				ok: uci.get('fptn', 'config', 'access_token') ? true : false,
+				ok: accessTokens().length > 0,
 				title: _('Access token is set'),
-				detail: uci.get('fptn', 'config', 'access_token')
-					? _('configured') : _('empty, the client refuses to start')
+				detail: accessTokens().length > 0
+					? (accessTokens().length === 1 ? _('configured')
+						: _('%d keys configured').format(accessTokens().length))
+					: _('empty, the client refuses to start')
 			},
 			{
 				ok: uci.get('fptn', 'config', 'enabled') === '1',
@@ -404,7 +503,7 @@ function lastRunHas(log, needles) {
 }
 
 function problemNote(log, connected) {
-	if (!uci.get('fptn', 'config', 'access_token'))
+	if (accessTokens().length === 0)
 		return _('no token configured');
 
 	if (connected)
@@ -527,19 +626,25 @@ return view.extend({
 
 			return Promise.all([
 				serviceInfo(), hasTunnel(), readLog(), tunnelStats(tun),
-				import(L.resource('fptn/brotli.js'))
+				import(L.resource('fptn/brotli.js')), zeroblockSections()
 			]);
 		});
 	},
 
 	render: function (data) {
 		var m, s, o;
+
+		if (data[5] && data[5].length)
+			return managedPage(this, data[5]);
+
 		var running = data[0].running;
 		var state = describe(running, data[1]);
-		var token = uci.get('fptn', 'config', 'access_token');
 
 		brotliDecode = data[4].BrotliDecode;
 
+		// Opening a page must not touch the daemon: procd already restarts it
+		// on a config change through its reload trigger. This used to restart
+		// or stop the tunnel just because someone looked at the tab.
 		poll.add(refresh, 5);
 
 		m = new form.Map('fptn', 'FPTN VPN', _('Censorship-resistant VPN'));
@@ -553,6 +658,7 @@ return view.extend({
 			return '<ol style="margin:0;padding-inline-start:1.5em">' +
 				'<li>' + _('Open %s in Telegram and copy the access token.').format(botLink) + '</li>' +
 				'<li>' + _('Paste it into the "Access token" field below and press "Save & Apply".') + '</li>' +
+				'<li>' + _('Got keys from several services? Put each on its own line.') + '</li>' +
 				'</ol>';
 		};
 
@@ -611,20 +717,35 @@ return view.extend({
 			};
 		});
 
-		o = s.taboption('general', form.TextValue, 'access_token', _('Access token'),
-			_('Token issued by %s in Telegram. It carries the server ' +
-			'list, so get a new one when the current token expires.').format(botLink));
-		o.rows = 4;
+		o = s.taboption('general', form.TextValue, 'access_token',
+			_('Access tokens'),
+			_('Token issued by %s in Telegram. It carries the server list, so ' +
+			'get a new one when the current token expires. One key per line - ' +
+			'the servers of every key are tried together, and the client ' +
+			'connects to whichever answers first.').format(botLink));
+		o.rows = 6;
 		o.rmempty = false;
+		o.cfgvalue = function () {
+			return accessTokens().join('\n');
+		};
+		o.write = function (section_id, value) {
+			var list = String(value || '').split(/\s+/)
+				.map(function (item) { return item.trim(); })
+				.filter(function (item) { return item.length > 0; });
+			// Один ключ пишем option'ом: так конфиг остаётся читаемым для тех
+			// версий пакета, что списка не знают.
+			uci.set('fptn', section_id, 'access_token',
+				list.length === 1 ? list[0] : list);
+		};
 		o.validate = function (section_id, value) {
-			if (!value || tokenServers(value))
+			if (!value || tokenServerNames(value))
 				return true;
 
-			return _('The token is damaged or not copied completely — copy it ' +
+			return _('A token is damaged or not copied completely — copy it ' +
 				'again from @fptn_bot');
 		};
 		o.onchange = function (ev, section_id, value) {
-			var names = tokenServers(value);
+			var names = tokenServerNames(value);
 			var widget = serverOption.getUIElement(section_id);
 
 			if (!names || !widget)
@@ -636,16 +757,36 @@ return view.extend({
 			widget.setValue(names.indexOf(selected) >= 0 ? selected : '');
 		};
 
-		o = s.taboption('general', form.Value, 'preferred_server', _('Preferred server'),
-			_('Server from the access token to connect to. "Auto" logs in to ' +
-			'every server at once and keeps the one that answers first.'));
+		o = s.taboption('general', form.Value, 'preferred_server',
+			_('Preferred server'),
+			_('Server from the access tokens to connect to. "Auto" logs in to ' +
+			'every server at once and keeps the one that answers first. A name ' +
+			'that appears in more than one key is offered qualified with its ' +
+			'service: "MyService/Server-1".'));
 		o.rmempty = true;
 		o.value('', _('Auto'));
-		(tokenServers(token || '') || []).forEach(function (name) {
-			o.value(name);
-		});
+		(tokenServerNames(accessTokens().join('\n')) || []).forEach(
+			function (name) {
+				o.value(name);
+			});
 
 		var serverOption = o;
+
+		o = s.taboption('general', form.Value, 'exclude_servers',
+			'Exclude servers',
+			'Regular expression. Servers whose name matches it are left out ' +
+			'of the pool - "Russia|Vietnam" drops both, "^FPTN.ONLINE/" drops ' +
+			'a whole service.');
+		o.rmempty = true;
+		o.placeholder = 'Russia|Vietnam';
+
+		o = s.taboption('general', form.Value, 'max_ping',
+			_('Latency limit, ms'),
+			_('A server slower than this is not picked, and the one in use is ' +
+			'replaced once it stays over the limit. Empty or 0 - no limit.'));
+		o.rmempty = true;
+		o.datatype = 'uinteger';
+		o.placeholder = '0';
 
 		o = s.taboption('general', form.ListValue, 'connection_strategy',
 			_('Connection strategy'),
@@ -684,6 +825,45 @@ return view.extend({
 		spoofingMethods.forEach(function (method) {
 			o.depends('bypass_method', method[0]);
 		});
+		o.rmempty = true;
+
+		o = s.taboption('routing', form.Value, 'socks_max_sessions',
+			_('SOCKS session limit'),
+			_('Cap on simultaneous SOCKS sessions. Empty derives it from the ' +
+			'file descriptor limit: two per session plus headroom.'));
+		o.datatype = 'uinteger';
+		o.placeholder = 'auto';
+		o.depends({ socks_listen: /.+/ });
+		o.rmempty = true;
+
+		o = s.taboption('general', form.Value, 'status_listen',
+			_('Status API address'),
+			_('Serve an HTTP API with the server pool and their latency, for ' +
+			'example 127.0.0.1:9091. Anything but the loopback needs a token ' +
+			'below - the client refuses to start otherwise, because the pool, ' +
+			'the latency probe and the server switch would be open to the ' +
+			'whole network.'));
+		o.datatype = 'ipaddrport';
+		o.placeholder = '127.0.0.1:9091';
+		o.rmempty = true;
+
+		o = s.taboption('general', form.Value, 'status_secret',
+			_('Status API token'),
+			_('Requests must carry Authorization: Bearer <token>. Empty means ' +
+			'no check, and then the address above may only be the loopback. ' +
+			'Required to reach the API from another host.'));
+		o.password = true;
+		o.depends({ status_listen: /.+/ });
+		o.rmempty = true;
+
+		o = s.taboption('general', form.Value, 'probe_interval',
+			_('Re-measure interval'),
+			_('Re-measure every server in the pool every N seconds. 0 keeps ' +
+			'only the reading taken at startup, so a server that was down at ' +
+			'launch stays marked dead.'));
+		o.datatype = 'uinteger';
+		o.placeholder = '0';
+		o.depends({ status_listen: /.+/ });
 		o.rmempty = true;
 
 		o = s.taboption('routing', form.Flag, 'use_fptn_dns', _('Use FPTN DNS'),

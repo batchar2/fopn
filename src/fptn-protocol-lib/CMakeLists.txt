@@ -112,6 +112,7 @@ set(FPTN_CLIENT_PROTOCOL_SOURCES
     connection/strategies/browser_mimicry/browser_mimicry.cpp
     https/connection_config.h
     https/api_client/api_client.h
+    https/socket_options.cpp
     https/api_client/api_client.cpp
     https/obfuscator/methods/tls/tls_obfuscator.cpp
     https/obfuscator/methods/tls/tls_obfuscator.h

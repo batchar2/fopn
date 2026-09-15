@@ -79,3 +79,11 @@ add_executable(
                       ${DOMAIN_LIST_SRC})
 target_link_libraries(DomainBlacklistTest PRIVATE ${LIBS})
 add_test(NAME DomainBlacklistTest COMMAND DomainBlacklistTest)
+
+# --- Traffic shaper test ---
+add_executable(
+  LeakyBucketTest traffic_shaper/LeakyBucketTest.cpp
+                  ${FPTN_SERVER_PATH}/traffic_shaper/leaky_bucket.h
+                  ${FPTN_SERVER_PATH}/traffic_shaper/leaky_bucket.cpp)
+target_link_libraries(LeakyBucketTest PRIVATE ${LIBS})
+add_test(NAME LeakyBucketTest COMMAND LeakyBucketTest)

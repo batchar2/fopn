@@ -6,6 +6,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #include "user/user_manager.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -42,7 +43,7 @@ UserManager::UserManager(const std::string& userfile,
 boost::asio::awaitable<LoginStatus> UserManager::LoginAsync(
     const std::string& username,
     const std::string& password,
-    int& bandwidth_bit) const {
+    std::int64_t& bandwidth_bit) const {
   bandwidth_bit = 0;
   if (use_remote_server_) {
     SPDLOG_INFO(
@@ -57,7 +58,7 @@ boost::asio::awaitable<LoginStatus> UserManager::LoginAsync(
       try {
         const auto msg = resp.Json();
         if (msg.contains("access_token") && msg.contains("bandwidth_bit")) {
-          bandwidth_bit = msg["bandwidth_bit"].get<int>();
+          bandwidth_bit = msg["bandwidth_bit"].get<std::int64_t>();
           co_return LoginStatus::kSuccess;
         }
         SPDLOG_INFO(
@@ -85,7 +86,7 @@ boost::asio::awaitable<LoginStatus> UserManager::LoginAsync(
 
 bool UserManager::Login(const std::string& username,
     const std::string& password,
-    int& bandwidth_bit) const {
+    std::int64_t& bandwidth_bit) const {
   bandwidth_bit = 0;  // reset
   if (use_remote_server_) {
     SPDLOG_INFO(
@@ -100,7 +101,7 @@ bool UserManager::Login(const std::string& username,
       try {
         const auto msg = resp.Json();
         if (msg.contains("access_token") && msg.contains("bandwidth_bit")) {
-          bandwidth_bit = msg["bandwidth_bit"].get<int>();
+          bandwidth_bit = msg["bandwidth_bit"].get<std::int64_t>();
           return true;
         }
         SPDLOG_INFO(

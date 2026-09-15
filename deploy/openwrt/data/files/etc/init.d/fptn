@@ -34,6 +34,24 @@ append_bool() {
 	fi
 }
 
+ACCESS_TOKENS=""
+
+collect_token() {
+	[ -n "$1" ] && ACCESS_TOKENS="${ACCESS_TOKENS:+$ACCESS_TOKENS }$1"
+}
+
+# Ключей может быть несколько: 'list access_token' на каждый. Одиночный
+# 'option access_token' из прежних версий по-прежнему понимается.
+collect_access_tokens() {
+	ACCESS_TOKENS=""
+	config_list_foreach config access_token collect_token
+	if [ -z "$ACCESS_TOKENS" ]; then
+		local single
+		config_get single config access_token
+		collect_token "$single"
+	fi
+}
+
 GATEWAY_CACHE=/var/run/fptn.gateway
 
 cached_gateway() {
@@ -80,7 +98,20 @@ detect_out_interface() {
 
 VPN_DNS=172.20.0.1
 
+# In coexistence mode the client owns neither routes nor the resolver: a
+# transparent proxy in front of it does, and rewriting dnsmasq would fight it.
+manages_system_dns() {
+	local socks_listen disable_routing
+	config_get socks_listen config socks_listen
+	config_get_bool disable_routing config disable_routing 0
+	[ -n "$socks_listen" ] && return 1
+	[ "$disable_routing" -eq 1 ] && return 1
+	return 0
+}
+
 apply_dns() {
+	manages_system_dns || return 0
+
 	local use_fptn_dns
 	config_get_bool use_fptn_dns config use_fptn_dns 1
 	[ "$use_fptn_dns" -eq 1 ] || return 0
@@ -97,6 +128,8 @@ apply_dns() {
 }
 
 restore_dns() {
+	manages_system_dns || return 0
+
 	uci -q revert dhcp
 	/etc/init.d/dnsmasq reload
 }
@@ -113,49 +146,90 @@ start_service() {
 		return 0
 	fi
 
-	local access_token
-	config_get access_token config access_token
-	if [ -z "$access_token" ]; then
+	collect_access_tokens
+	if [ -z "$ACCESS_TOKENS" ]; then
 		logger -p daemon.err -t fptn "access_token is not set, not starting"
 		return 1
 	fi
 
+	# Coexistence mode with a transparent proxy (ZeroBlock and friends):
+	# routes are not ours, so a default route is not required.
+	local socks_listen disable_routing
+	config_get socks_listen config socks_listen
+	config_get_bool disable_routing config disable_routing 0
+	[ -n "$socks_listen" ] && disable_routing=1
+
 	local gateway
 	gateway=$(wait_for_gateway)
-	if [ -z "$gateway" ]; then
+	if [ -z "$gateway" ] && [ "$disable_routing" -ne 1 ]; then
 		logger -p daemon.err -t fptn "no default route, not starting"
 		return 1
 	fi
-	echo "$gateway" > "$GATEWAY_CACHE"
+	[ -n "$gateway" ] && echo "$gateway" > "$GATEWAY_CACHE"
 
-	procd_open_instance
-	procd_set_param command "$PROG" --access-token "$access_token"
-	procd_append_param command --gateway-ip "$gateway"
+	# Named so that `ubus call service list` and LuCI can find it.
+	procd_open_instance fptn
+	procd_set_param command "$PROG"
+	local token
+	for token in $ACCESS_TOKENS; do
+		procd_append_param command --access-token "$token"
+	done
+	[ -n "$gateway" ] && procd_append_param command --gateway-ip "$gateway"
 
 	local iface
 	config_get iface config out_network_interface
-	[ -z "$iface" ] && iface=$(detect_out_interface "$gateway")
-	if [ -z "$iface" ]; then
+	[ -z "$iface" ] && [ -n "$gateway" ] && iface=$(detect_out_interface "$gateway")
+	if [ -z "$iface" ] && [ "$disable_routing" -ne 1 ]; then
 		logger -p daemon.err -t fptn "gateway $gateway is not reachable, not starting"
 		return 1
 	fi
-	procd_append_param command --out-network-interface "$iface"
+	[ -n "$iface" ] && procd_append_param command --out-network-interface "$iface"
+
+	# Integration with transparent proxies
+	[ "$disable_routing" -eq 1 ] && procd_append_param command --disable-routing
+	append_option routing_mark routing-mark
+	append_option socks_listen socks-listen
+	append_option socks_route_table socks-route-table
 
 	append_option preferred_server preferred-server
+	append_option exclude_servers exclude-servers
+	append_option max_ping max-ping
 	append_option tun_interface_name tun-interface-name
 	append_option sni sni
 	append_option bypass_method bypass-method
 	append_option connection_strategy connection-strategy
 	append_option mtu_size mtu-size
+	append_option socks_max_sessions socks-max-sessions
+	append_option status_listen status-listen
+	append_option status_secret status-secret
+	append_option probe_interval probe-interval
 
 	append_bool enable_split_tunnel enable-split-tunnel 1
 	append_option split_tunnel_mode split-tunnel-mode
-	append_list split_tunnel_domains split-tunnel-domains
+	# The domain list comes from a file: two thousand UCI entries would be
+	# read over ubus on every LuCI page load and glued into a 35 KB command
+	# line. A list left in UCI still works and takes precedence.
+	LIST_VALUES=""
+	config_list_foreach config split_tunnel_domains collect_list_value
+	if [ -z "$LIST_VALUES" ]; then
+		local domains_file
+		config_get domains_file config split_tunnel_domains_file \
+			/etc/fptn/split_tunnel_domains.txt
+		if [ -f "$domains_file" ]; then
+			LIST_VALUES=$(grep -vE '^[[:space:]]*(#|$)' "$domains_file" \
+				| tr '\n' ',' | sed 's/,$//')
+		fi
+	fi
+	[ -n "$LIST_VALUES" ] && \
+		procd_append_param command --split-tunnel-domains "$LIST_VALUES"
 	append_list exclude_tunnel_networks exclude-tunnel-networks
 	append_list include_tunnel_networks include-tunnel-networks
 	append_list blacklist_domains blacklist-domains
 
 	procd_set_param respawn 3600 5 0
+	# Every proxied session costs two descriptors, and the default soft limit
+	# of 1024 runs out within hours of office traffic.
+	procd_set_param limits nofile="16384 16384"
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance
@@ -168,8 +242,16 @@ stop_service() {
 	restore_dns
 }
 
+# Without this rc.common turns `reload` into `restart`, and every edit in
+# LuCI would tear the tunnel down.
+reload_service() {
+	stop
+	start
+}
+
 service_triggers() {
 	procd_add_reload_trigger fptn
+	# WAN only: a LAN interface flapping has nothing to do with the tunnel,
+	# and restarting on it drops every session behind the router.
 	procd_add_interface_trigger "interface.*.up" wan /etc/init.d/fptn restart
-	procd_add_interface_trigger "interface.*.up" lan /etc/init.d/fptn restart
 }

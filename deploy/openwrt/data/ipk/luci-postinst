@@ -1,0 +1,10 @@
+#!/bin/sh
+
+[ -n "$IPKG_INSTROOT" ] && exit 0
+
+# LuCI caches the menu and rpcd caches the ACLs: without this the page stays
+# invisible until a reboot.
+rm -f /tmp/luci-indexcache* /tmp/luci-modulecache/* 2>/dev/null
+/etc/init.d/rpcd restart >/dev/null 2>&1
+
+exit 0

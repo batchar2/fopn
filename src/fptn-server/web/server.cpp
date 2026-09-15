@@ -204,7 +204,7 @@ boost::asio::awaitable<int> Server::HandleApiLogin(
     const auto request = nlohmann::json::parse(req.body());
     const auto username = request.at("username").get<std::string>();
     const auto password = request.at("password").get<std::string>();
-    int bandwidth_bit = 0;
+    std::int64_t bandwidth_bit = 0;
     const auto status =
         co_await user_manager_->LoginAsync(username, password, bandwidth_bit);
     if (status == fptn::user::LoginStatus::kSuccess) {

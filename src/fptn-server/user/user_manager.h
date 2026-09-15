@@ -6,6 +6,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -59,11 +60,11 @@ class UserManager {
    */
   bool Login(const std::string& username,
       const std::string& password,
-      int& bandwidth_bit) const;
+      std::int64_t& bandwidth_bit) const;
 
   boost::asio::awaitable<LoginStatus> LoginAsync(const std::string& username,
       const std::string& password,
-      int& bandwidth_bit) const;
+      std::int64_t& bandwidth_bit) const;
 
  private:
   /// Indicates whether to use remote server authentication.

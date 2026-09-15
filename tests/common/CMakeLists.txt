@@ -78,3 +78,8 @@ add_test(NAME TlsServerHelloRestampTest COMMAND TlsServerHelloRestampTest)
 add_executable(ClientStopRaceTest network/ClientStopRaceTest.cpp)
 target_link_libraries(ClientStopRaceTest PRIVATE GTest::gtest GTest::gtest_main)
 add_test(NAME ClientStopRaceTest COMMAND ClientStopRaceTest)
+
+# --- Common user manager test ---
+add_executable(CommonUserManagerTest user/CommonUserManagerTest.cpp)
+target_link_libraries(CommonUserManagerTest PRIVATE ${LIBS})
+add_test(NAME CommonUserManagerTest COMMAND CommonUserManagerTest)

@@ -5,6 +5,7 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 =============================================================================*/
 
 #include "fptn-protocol-lib/https/api_client/api_client.h"
+#include "fptn-protocol-lib/https/socket_options.h"
 
 #include <atomic>
 #include <chrono>
@@ -63,12 +64,32 @@ Distributed under the MIT License (https://opensource.org/licenses/MIT)
 
 namespace {
 
+// ConnectStream keeps the stock connect for the default path and, when a
+// routing mark is configured, opens and marks the socket first so the kernel's
+// route lookup sees the mark.
+template <typename Stream>
+boost::asio::ip::tcp::endpoint ConnectStream(
+    Stream& stream, const boost::asio::ip::tcp::resolver::results_type& results) {
+  if (fptn::protocol::https::GetRoutingMark() == 0) {
+    return boost::beast::get_lowest_layer(stream).connect(results);
+  }
+  boost::system::error_code ec;
+  auto& socket = boost::beast::get_lowest_layer(stream).socket();
+  const auto endpoint =
+      fptn::protocol::https::ConnectMarked(socket, results, ec);
+  if (ec) {
+    throw boost::system::system_error(ec);
+  }
+  return endpoint;
+}
+
 bool IsPortOpen(const std::string& host, const int port) {
   constexpr std::chrono::milliseconds kConnectTimeout{1500};
   try {
     boost::asio::io_context ioc;
     boost::asio::ip::tcp::socket socket(ioc);
     socket.open(boost::asio::ip::tcp::v4());
+    fptn::protocol::https::ApplyRoutingMark(socket.native_handle());
 
     boost::asio::ip::tcp::endpoint endpoint;
     boost::system::error_code addr_ec;
@@ -420,8 +441,42 @@ boost::asio::awaitable<Response> ApiClient::AsyncPost(const std::string& handle,
       }
     }
 
-    co_await boost::beast::get_lowest_layer(stream).async_connect(
-        results, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    if (fptn::protocol::https::GetRoutingMark() != 0) {
+      // The mark has to be on the socket before the SYN, and a range connect
+      // reopens the socket per attempt, which would drop it. So the endpoints
+      // are walked by hand - every one of them, because a host with several
+      // addresses must keep its fallback. The connect still goes through the
+      // beast stream: a raw socket connect ignores the stream deadline, and a
+      // blackholed address would then hang on the kernel SYN timeout instead.
+      ec = boost::asio::error::host_not_found;
+      for (const auto& entry : results) {
+        auto& socket = boost::beast::get_lowest_layer(stream).socket();
+        boost::system::error_code open_ec;
+        socket.open(entry.endpoint().protocol(), open_ec);
+        if (open_ec) {
+          // Without the mark the tunnel traffic would come back through the
+          // tunnel, so an unmarked socket is worse than no connection.
+          SPDLOG_ERROR("AsyncPost [{}] - Cannot open a marked socket: {}",
+              handle, open_ec.message());
+          ec = open_ec;
+          // Keep going: a router with no IPv6 route fails to open the AAAA
+          // endpoint, and the IPv4 one behind it is exactly the fallback.
+          continue;
+        }
+        fptn::protocol::https::ApplyRoutingMark(socket.native_handle());
+        co_await boost::beast::get_lowest_layer(stream).async_connect(
+            entry.endpoint(),
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        if (!ec) {
+          break;
+        }
+        boost::system::error_code close_ec;
+        socket.close(close_ec);
+      }
+    } else {
+      co_await boost::beast::get_lowest_layer(stream).async_connect(
+          results, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+    }
     if (ec) {
       SPDLOG_ERROR("AsyncPost [{}] - Connect failed for {}: {}", handle, host_,
           ec.message());
@@ -613,8 +668,8 @@ Response ApiClient::GetImpl(const std::string& handle, int timeout) const {
       stream.next_layer().next_layer().expires_after(
           std::chrono::seconds(timeout));
 
-      auto connected_endpoint = boost::beast::get_lowest_layer(stream).connect(
-          resolve_result.results);
+      auto connected_endpoint =
+          ConnectStream(stream, resolve_result.results);
       server_ip = connected_endpoint.address().to_string();
 
       SPDLOG_INFO("GET [{}] - Successfully connected to {}", handle, host_);
@@ -778,8 +833,8 @@ Response ApiClient::PostImpl(const std::string& handle,
       stream.next_layer().next_layer().expires_after(
           std::chrono::seconds(timeout));
 
-      auto connected_endpoint = boost::beast::get_lowest_layer(stream).connect(
-          resolve_result.results);
+      auto connected_endpoint =
+          ConnectStream(stream, resolve_result.results);
       server_ip = connected_endpoint.address().to_string();
 
       SPDLOG_INFO("POST [{}] - Successfully connected to {}", handle, host_);
@@ -952,8 +1007,7 @@ bool ApiClient::TestHandshakeImpl(int timeout) const {
     stream.next_layer().next_layer().expires_after(
         std::chrono::seconds(timeout));
 
-    auto connected_endpoint =
-        boost::beast::get_lowest_layer(stream).connect(resolve_result.results);
+    auto connected_endpoint = ConnectStream(stream, resolve_result.results);
     server_ip = connected_endpoint.address().to_string();
 
     SPDLOG_INFO("TestHandshake - Successfully connected to {} (IP: {})", host_,
@@ -1020,7 +1074,7 @@ bool ApiClient::TestHandshakeImpl(int timeout) const {
     SPDLOG_WARN("Handshake failed for server {} (IP: {}): {}", host_copy,
         server_ip_copy, error_msg);
   } catch (const std::exception& e) {
-    // Создаем копии строк перед использованием в логгере
+    // Copy the strings before handing them to the logger
     std::string host_copy = host_;
     std::string server_ip_copy = server_ip;
     std::string error_msg;
@@ -1034,7 +1088,7 @@ bool ApiClient::TestHandshakeImpl(int timeout) const {
     SPDLOG_WARN("Handshake failed for server {} (IP: {}): {}", host_copy,
         server_ip_copy, error_msg);
   } catch (...) {
-    // Создаем копии строк перед использованием в логгере
+    // Copy the strings before handing them to the logger
     std::string host_copy = host_;
     std::string server_ip_copy = server_ip;
 

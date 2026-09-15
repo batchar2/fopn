@@ -297,3 +297,66 @@ msgstr "تونل ترافیک را در هر دو جهت منتقل می‌کن�
 
 msgid "sent %s, received %s"
 msgstr "ارسال‌شده %s، دریافت‌شده %s"
+
+msgid "%d keys configured"
+msgstr ""
+
+msgid "There are unsaved changes. The checks below look at the applied configuration — press \"Save & Apply\""
+msgstr ""
+
+msgid "Got keys from several services? Put each on its own line."
+msgstr ""
+
+msgid "Access tokens"
+msgstr ""
+
+msgid "Token issued by %s in Telegram. It carries the server list, so get a new one when the current token expires. One key per line - the servers of every key are tried together, and the client connects to whichever answers first."
+msgstr ""
+
+msgid "A token is damaged or not copied completely — copy it again from @fptn_bot"
+msgstr ""
+
+msgid "Server from the access tokens to connect to. \"Auto\" logs in to every server at once and keeps the one that answers first. A name that appears in more than one key is offered qualified with its service: \"MyService/Server-1\"."
+msgstr ""
+
+msgid "Latency limit, ms"
+msgstr ""
+
+msgid "A server slower than this is not picked, and the one in use is replaced once it stays over the limit. Empty or 0 - no limit."
+msgstr ""
+
+msgid "SOCKS session limit"
+msgstr ""
+
+msgid "Cap on simultaneous SOCKS sessions. Empty derives it from the file descriptor limit: two per session plus headroom."
+msgstr ""
+
+msgid "Status API address"
+msgstr ""
+
+msgid "Serve an HTTP API with the server pool and their latency, for example 127.0.0.1:9091. Anything but the loopback needs a token below - the client refuses to start otherwise, because the pool, the latency probe and the server switch would be open to the whole network."
+msgstr ""
+
+msgid "Status API token"
+msgstr ""
+
+msgid "Requests must carry Authorization: Bearer <token>. Empty means no check, and then the address above may only be the loopback. Required to reach the API from another host."
+msgstr ""
+
+msgid "Re-measure interval"
+msgstr ""
+
+msgid "Re-measure every server in the pool every N seconds. 0 keeps only the reading taken at startup, so a server that was down at launch stays marked dead."
+msgstr ""
+
+msgid "FPTN on this router is run by ZeroBlock (section: %s)."
+msgstr ""
+
+msgid "The settings on this page are not used. Access tokens, server selection and every other option are set in the ZeroBlock section. This page only matters when FPTN runs on its own, without ZeroBlock."
+msgstr ""
+
+msgid "Open ZeroBlock"
+msgstr ""
+
+msgid "Package version: %s"
+msgstr ""

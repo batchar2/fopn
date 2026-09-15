@@ -151,9 +151,23 @@ inline bool init(const std::string& app_name, bool mask_ip_addresses = true) {
       }
     }
     auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+#ifdef FPTN_OPENWRT
+    // On a router /var/log is a symlink to tmpfs, so the log lives in RAM -
+    // and there is 512 MB of it for everything. The default 12 MB per file
+    // across three files would eat 36 MB: keep 2 MB across two.
+    constexpr std::size_t kLogFileSize = 1024 * 1024;
+    constexpr std::size_t kLogFiles = 2;
+#else
+    constexpr std::size_t kLogFileSize = 12 * 1024 * 1024;
+    constexpr std::size_t kLogFiles = 3;
+#endif
     auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-        log_file.string(), 12 * 1024 * 1024, 3, true);
+        log_file.string(), kLogFileSize, kLogFiles, true);
+#ifdef FPTN_OPENWRT
+    constexpr std::size_t kLogQueueSize = 4096;
+#else
     constexpr std::size_t kLogQueueSize = 32768;
+#endif
     spdlog::init_thread_pool(kLogQueueSize, 1);
     auto logger = std::make_shared<spdlog::async_logger>(app_name,
         spdlog::sinks_init_list{console_sink, file_sink}, spdlog::thread_pool(),
